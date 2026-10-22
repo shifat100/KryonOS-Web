@@ -193,7 +193,12 @@ class VFS{constructor(sim){this.sim=sim;this.dbName='KryonOS_VFS_v7';this.store=
   async init(){return new Promise(resolve=>{try{const req=indexedDB.open(this.dbName,1);req.onupgradeneeded=e=>{const db=e.target.result;if(!db.objectStoreNames.contains(this.store))db.createObjectStore(this.store,{keyPath:'path'});};req.onsuccess=async e=>{this.db=e.target.result;await this._load();if(this.cache.size===0)await this.seedDefaults();resolve();};req.onerror=()=>{this.seedDefaults().then(resolve);};}catch(e){this.seedDefaults().then(resolve);}});}
   _load(){return new Promise(resolve=>{if(!this.db)return resolve();const tx=this.db.transaction(this.store,'readonly');const req=tx.objectStore(this.store).getAll();req.onsuccess=()=>{this.cache.clear();(req.result||[]).forEach(it=>this.cache.set(it.path,it));resolve();};req.onerror=()=>resolve();});}
   _norm(p){let c=String(p||'').replace(/\/+/g,'/');if(c.length>1&&c.endsWith('/'))c=c.slice(0,-1);if(!c.startsWith('/'))c='/'+c;return c;}
-  async seedDefaults(){for(const d of ['/local','/local/apps','/local/system','/local/tmp_download','/sd','/sd/apps','/sd/system'])this._put(d,null,true,false);
+  async seedDefaults(){
+
+if (this.sim) {
+    this.sim.permissions.add('com.kryon.dailygk:storage');
+}
+    for(const d of ['/local','/local/apps','/local/system','/local/tmp_download','/sd','/sd/apps','/sd/system'])this._put(d,null,true,false);
     this._installDemo('com.kryon.calc',{name:'Calculator',packageName:'com.kryon.calc',version:'1.0.0',api:1,author:'KryonTeam',category:'Utility',type:'App',description:'Standard utility calculator.',permissions:[]},`System.fillScreen(System.color(20,20,30));\nSystem.setTextColor(WHITE, System.color(20,20,30));\nSystem.drawString("Calculator", 55, 30, 4);\nSystem.fillRoundRect(20, 100, 200, 40, 6, BLUE);\nSystem.setTextColor(WHITE, BLUE);\nSystem.drawString("Tap to beep", 70, 112, 2);\nwhile (true) { var t = System.getTouch(); if (t.touched) { PWM.setTone(18, 1400, 100); System.notify("Calc", "Button pressed", "info", 1500); } System.delay(40); }`);
     this._installDemo('com.kryon.paint',{name:'Canvas Paint',packageName:'com.kryon.paint',version:'1.0.0',api:1,author:'KryonTeam',category:'Utility',type:'App',description:'Finger drawing demo.',permissions:[]},`System.fillScreen(BLACK);\nSystem.setTextColor(YELLOW, BLACK);\nSystem.drawString("Drag to draw", 30, 10, 2);\nvar lastX = -1, lastY = -1;\nwhile (true) { var t = System.getTouch(); if (t.touched && t.y > 40) { System.fillCircle(t.x, t.y, 4, CYAN); if (lastX >= 0) System.drawLine(lastX, lastY, t.x, t.y, CYAN); lastX = t.x; lastY = t.y; } else { lastX = -1; lastY = -1; } System.delay(10); }`);
     await this._persistAll();}
