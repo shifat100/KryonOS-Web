@@ -115,12 +115,38 @@ textarea.code-editor:focus{border-color:var(--accent)}
       <button class="btn sec" id="btn-seed-demo">+ Install Demo Apps</button>
     </div>
   </div>
-  <div class="tab-pane" data-pane="studio">
+<div class="tab-pane" data-pane="studio">
     <div class="row">
       <label>Name</label>
-      <input type="text" id="app-name" value="Touch Counter" style="flex:1">
+      <input type="text" id="app-name" value="Daily GK" style="flex:1">
       <label>Package</label>
-      <input type="text" id="app-pkg" value="com.kryon.counter" style="flex:1">
+      <input type="text" id="app-pkg" value="com.dailygk.app" style="flex:1">
+    </div>
+    <div class="row">
+      <label>Version</label>
+      <input type="text" id="app-ver" value="1.0.0" style="width:70px">
+      <label>Author</label>
+      <input type="text" id="app-author" value="Shifat100" style="flex:1">
+      <label>Category</label>
+      <select id="app-cat" style="width:110px">
+        <option value="Education">Education</option>
+        <option value="Utility">Utility</option>
+        <option value="Game">Game</option>
+        <option value="Media">Media</option>
+        <option value="System">System</option>
+      </select>
+    </div>
+    <div class="row">
+      <label>Description</label>
+      <input type="text" id="app-desc" value="Daily GK offline quiz and study reader." style="flex:1">
+    </div>
+    <div class="row" style="background:#0d0d18;padding:6px 10px;border-radius:6px;border:1px solid var(--border)">
+      <label style="margin-right:8px">Permissions:</label>
+      <label style="cursor:pointer;margin-right:12px"><input type="checkbox" id="perm-storage" checked> Storage</label>
+      <label style="cursor:pointer;margin-right:12px"><input type="checkbox" id="perm-network" checked> Network</label>
+      <label style="cursor:pointer;margin-right:12px"><input type="checkbox" id="perm-gpio"> GPIO</label>
+      <label style="cursor:pointer;margin-right:12px"><input type="checkbox" id="perm-i2c"> I2C</label>
+      <label style="cursor:pointer"><input type="checkbox" id="perm-ai"> AI</label>
     </div>
     <textarea class="code-editor" id="app-code" spellcheck="false"></textarea>
     <div class="row">
@@ -489,11 +515,25 @@ class Simulator{
   captureScreenshot(){try{const w=this.canvas.width,h=this.canvas.height;const merged=document.createElement('canvas');merged.width=w;merged.height=h;const mctx=merged.getContext('2d');mctx.imageSmoothingEnabled=false;mctx.drawImage(this.canvas,0,0);mctx.drawImage(this.overlayCanvas,0,0);const a=document.createElement('a');const ts=new Date().toISOString().replace(/[:.]/g,'-');a.download=`kryonos_${this.state}_${ts}.png`;a.href=merged.toDataURL('image/png');document.body.appendChild(a);a.click();document.body.removeChild(a);log('[Sim] Screenshot saved: '+a.download,'ok');this.notif.post('Screenshot','Saved to downloads','success',2000);}catch(e){log('[Sim] Screenshot failed: '+e.message,'err');}}
   render3D(x=0,y=0){if(this.kryon3D.sprite)this.disp.ctx.drawImage(this.kryon3D.sprite.canvas,x,y);}
   async launchApp(app,codeOverride){
-    let rawCode=codeOverride!=null?codeOverride:this.vfs.read(app.isLegacy?app.path:app.path+'/main.js');
-    if(!rawCode){log('App main.js not found at '+app.path,'err');return;}
-    this.exitRequested=false;this.touch={x:0,y:0,touched:false,justPressed:false};this.pointerDown=false;
-    this.currentPkg=app.pkg||app.name;
-    const appDir=app.path.endsWith('/')?app.path:app.path+'/';
+   let rawCode = codeOverride != null ? codeOverride : this.vfs.read(app.isLegacy ? app.path : app.path + '/main.js');
+    if (!rawCode) { log('App main.js not found at ' + app.path, 'err'); return; }
+
+    this.exitRequested = false;
+    this.touch = { x: 0, y: 0, touched: false, justPressed: false };
+    this.pointerDown = false;
+    this.currentPkg = app.pkg || app.name;
+
+    // Load any permissions granted in app_permissions.json for this package
+    const permFilePath = '/local/system/app_permissions.json';
+    if (this.vfs.exists(permFilePath)) {
+      try {
+        const grants = JSON.parse(this.vfs.read(permFilePath)) || {};
+        const appPerms = grants[this.currentPkg] || [];
+        appPerms.forEach(p => this.permissions.add(`${this.currentPkg}:${p}`));
+      } catch (e) {}
+    }
+
+    const appDir = app.path.endsWith('/') ? app.path : app.path + '/';
     this.env.FS._setSandboxRoot(appDir);this.env.IPC._setCurrentAppId(this.currentPkg);this.env.IPC._setLaunchArgs('');
     this.setState(S.RUN_APP);
     this.disp.resetState();this.disp.activeSprite=null;this.disp.spriteBound=false;
@@ -518,7 +558,77 @@ class Simulator{
     $('btn-refresh-apps').onclick=()=>this.refreshAppList();
     $('btn-seed-demo').onclick=async()=>{await this.vfs.seedDefaults();this.refreshAppList();this.launcher.scan();this.notif.post('Storage','Demo apps installed','ok');};
     $('app-code').value=`// Touch Counter — KryonOS demo pattern\nvar bg = System.color(18,18,28);\nSystem.fillScreen(bg);\nvar count = 0;\n\nfunction drawUI() {\n  System.fillScreen(bg);\n  System.setTextColor(WHITE, bg);\n  System.drawString("Touch Counter", 35, 30, 4);\n  System.setTextColor(CYAN, bg);\n  System.drawString("Count: " + count, 75, 110, 4);\n  System.fillRoundRect(30, 200, 180, 50, 8, GREEN);\n  System.setTextColor(BLACK, GREEN);\n  System.drawString("TAP TO COUNT", 45, 215, 2);\n}\n\ndrawUI();\n\nwhile (true) {\n  var t = System.getTouch();\n  if (t.touched) {\n    if (t.y >= 200 && t.y <= 250 && t.x >= 30 && t.x <= 210) {\n      count++;\n      PWM.setTone(18, 1200 + count * 40, 60);\n      drawUI();\n    }\n  }\n  System.delay(40);\n}`;
-    $('btn-install').onclick=()=>{const name=$('app-name').value.trim()||'My App';const pkg=$('app-pkg').value.trim()||'com.app.test';const code=$('app-code').value;const dir='/local/apps/'+pkg;this.vfs.mkdir(dir);this.vfs.write(dir+'/app.json',JSON.stringify({name,packageName:pkg,version:'1.0.0',api:2,author:'Developer',type:'App',category:'Utility'},null,2));this.vfs.write(dir+'/main.js',code);log('💾 Installed '+name+' at '+dir,'ok');this.refreshAppList();this.notif.post('Storage',name+' installed','ok');};
+   $('btn-install').onclick = () => {
+      const name = $('app-name').value.trim() || 'My App';
+      const pkg = $('app-pkg').value.trim().toLowerCase() || 'com.app.test';
+      const version = ($('app-ver') ? $('app-ver').value.trim() : '1.0.0') || '1.0.0';
+      const author = ($('app-author') ? $('app-author').value.trim() : 'Developer') || 'Developer';
+      const category = ($('app-cat') ? $('app-cat').value : 'Utility') || 'Utility';
+      const description = ($('app-desc') ? $('app-desc').value.trim() : '') || 'No description.';
+      const code = $('app-code').value;
+
+      // 1. Validate packageName matching KryonOS firmware rules (lowercase, no spaces, dot-separated)
+      if (pkg.includes(' ') || !pkg.includes('.')) {
+        alert('Invalid Package Name!\nMust be lowercase, no spaces, dot-separated (e.g. com.dailygk.app)');
+        return;
+      }
+
+      // 2. Gather selected permissions
+      const perms = [];
+      if ($('perm-storage') && $('perm-storage').checked) perms.push('storage');
+      if ($('perm-network') && $('perm-network').checked) perms.push('network');
+      if ($('perm-gpio') && $('perm-gpio').checked) perms.push('gpio');
+      if ($('perm-i2c') && $('perm-i2c').checked) perms.push('i2c');
+      if ($('perm-ai') && $('perm-ai').checked) perms.push('ai');
+
+      // 3. Build standard KryonOS AppMetadata manifest
+      const manifest = {
+        name: name,
+        packageName: pkg,
+        version: version,
+        api: KRYONOS_API_LEVEL,
+        author: author,
+        type: 'App',
+        category: category,
+        description: description,
+        changelog: 'Initial release',
+        permissions: perms,
+        allowCompanionLaunch: true
+      };
+
+      const dir = '/local/apps/' + pkg;
+
+      // 4. Write app package to Virtual Filesystem
+      this.vfs.mkdir(dir);
+      this.vfs.write(dir + '/app.json', JSON.stringify(manifest, null, 2));
+      this.vfs.write(dir + '/main.js', code);
+
+      // 5. Update KryonOS system permissions file (/local/system/app_permissions.json)
+      let permFileContent = {};
+      const permFilePath = '/local/system/app_permissions.json';
+      if (this.vfs.exists(permFilePath)) {
+        try {
+          permFileContent = JSON.parse(this.vfs.read(permFilePath)) || {};
+        } catch (e) {
+          permFileContent = {};
+        }
+      }
+      permFileContent[pkg] = perms;
+      this.vfs.write(permFilePath, JSON.stringify(permFileContent, null, 2));
+
+      // 6. Grant active simulator permissions so it immediately reflects in the emulator
+      perms.forEach(p => {
+        this.permissions.add(`${pkg}:${p}`);
+      });
+
+      // 7. Register in IPC Manager
+      this.env.IPC.registerApp(pkg, dir, name, category, [], true);
+
+      log(`💾 Installed "${name}" (${pkg}) v${version} with [${perms.join(', ')}] permissions.`, 'ok');
+      this.refreshAppList();
+      this.launcher.scan();
+      this.notif.post('Installed', `${name} v${version} ready`, 'success', 2500);
+    };
     $('btn-run-live').onclick=()=>{const name=$('app-name').value.trim()||'Live Test';const code=$('app-code').value;this.launchApp({name,path:'/tmp/live/',pkg:'com.kryon.live'},code);};
     $('btn-format').onclick=async()=>{if(!confirm('Format virtual flash?'))return;await this.vfs.reset();this.refreshAppList();this.launcher.scan();};
     $('board-select').onchange=e=>{const b=BOARDS[e.target.value];if(!b)return;this.sim.board=b;this.canvas.width=b.w;this.canvas.height=b.h;this.overlayCanvas.width=b.w;this.overlayCanvas.height=b.h;this.disp.W=b.w;this.disp.H=b.h;$('board-label').textContent=b.name;this._applyCanvasScale();this.reboot();};
