@@ -53,7 +53,7 @@ class AudioPWM{
 const audioHW=new AudioPWM();
 
 class VFS{
-  constructor(sim){this.sim=sim;this.dbName='KryonOS_VFS_v9';this.store='files';this.db=null;this.cache=new Map();}
+  constructor(sim){this.sim=sim;this.dbName='KryonOS_VFS_v10';this.store='files';this.db=null;this.cache=new Map();}
   async init(){
     return new Promise(resolve=>{
       try{
@@ -175,7 +175,10 @@ class TFTDisplay{
   fillCircle(x,y,r,c){const t=this._t();t.fillStyle=TFTDisplay.c565(c);t.beginPath();t.arc(x,y,Math.abs(r),0,Math.PI*2);t.fill();}
   drawTriangle(x0,y0,x1,y1,x2,y2,c){this.drawLine(x0,y0,x1,y1,c);this.drawLine(x1,y1,x2,y2,c);this.drawLine(x2,y2,x0,y0,c);}
   fillTriangle(x0,y0,x1,y1,x2,y2,c){const t=this._t();t.fillStyle=TFTDisplay.c565(c);t.beginPath();t.moveTo(x0,y0);t.lineTo(x1,y1);t.lineTo(x2,y2);t.closePath();t.fill();}
-  _rr(t,x,y,w,h,r){r=Math.min(r,w/2,h/2);t.beginPath();t.moveTo(x+r,y);t.arcTo(x+w,y,x+w,y+h,r);t.arcTo(x+w,y+h,x,y+h,r);t.arcTo(x,y+h,x,y,r);t.arcTo(x,y,x+w,y,r);t.closePath();}
+  _rr(t,x,y,w,h,r){
+    r=Math.min(r,w/2,h/2);t.beginPath();t.moveTo(x+r,y);t.arcTo(x+w,y,x+w,y+h,r);
+    t.arcTo(x+w,y+h,x,y+h,r);t.arcTo(x,y+h,x,y,r);t.arcTo(x,y,x+w,y,r);t.closePath();
+  }
   drawRoundRect(x,y,w,h,r,c){const t=this._t();t.strokeStyle=TFTDisplay.c565(c);t.lineWidth=1;this._rr(t,x+.5,y+.5,Math.max(0,w-1),Math.max(0,h-1),r);t.stroke();}
   fillRoundRect(x,y,w,h,r,c){if(w<=0||h<=0)return;const t=this._t();t.fillStyle=TFTDisplay.c565(c);this._rr(t,x,y,w,h,r);t.fill();}
   setTextColor(fg,bg){this.fg=TFTDisplay.c565(fg);this.bg=(bg!=null)?TFTDisplay.c565(bg):null;}
@@ -453,6 +456,53 @@ const BOARDS={
   'esp32-cyd-28':{name:'CYD-28',w:240,h:320,chip:'ESP32',hasPsram:false},
   'esp32doit-devkit-v1':{name:'DevKit v1',w:240,h:320,chip:'ESP32',hasPsram:false}
 };
+
+/* ─── FastMath Hardware Acceleration Engine (1:1 with C++) ─── */
+function buildFastMath(){
+  return {
+    sin:r=>Math.sin(r),cos:r=>Math.cos(r),tan:r=>Math.tan(r),
+    fastSin:d=>Math.sin(d*Math.PI/180),fastCos:d=>Math.cos(d*Math.PI/180),
+    asin:x=>Math.asin(x),acos:x=>Math.acos(x),atan2:(y,x)=>Math.atan2(y,x),
+    sqrt:x=>Math.sqrt(x),hypot:(x,y)=>Math.hypot(x,y),
+    clamp:(v,a,b)=>Math.max(a,Math.min(b,v)),lerp:(a,b,t)=>a+t*(b-a),
+    map:(v,imin,imax,omin,omax)=>{if(Math.abs(imax-imin)<1e-6)return omin;return (v-imin)*(omax-omin)/(imax-imin)+omin;},
+    degToRad:d=>d*Math.PI/180,radToDeg:r=>r*180/Math.PI,
+    random:()=>Math.random(),randomRange:(a,b)=>a+Math.random()*(b-a),
+    vec2Distance:(x1,y1,x2,y2)=>Math.hypot(x2-x1,y2-y1),
+    vec3Distance:(x1,y1,z1,x2,y2,z2)=>Math.sqrt((x2-x1)**2+(y2-y1)**2+(z2-z1)**2),
+    dot2:(x1,y1,x2,y2)=>x1*x2+y1*y2,dot3:(x1,y1,z1,x2,y2,z2)=>x1*x2+y1*y2+z1*z2,
+    cross3:(ax,ay,az,bx,by,bz)=>({x:ay*bz-az*by,y:az*bx-ax*bz,z:ax*by-ay*bx}),
+    normalize2:(x,y)=>{const l=Math.hypot(x,y);return l>1e-5?{x:x/l,y:y/l}:{x:0,y:0};},
+    normalize3:(x,y,z)=>{const l=Math.sqrt(x*x+y*y+z*z);return l>1e-5?{x:x/l,y:y/l,z:z/l}:{x:0,y:0,z:0};},
+    mat4Identity:()=>[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1],
+    mat4Multiply:(a,b)=>{const o=new Array(16).fill(0);for(let r=0;r<4;r++)for(let c=0;c<4;c++)o[r*4+c]=a[r*4]*b[c]+a[r*4+1]*b[4+c]+a[r*4+2]*b[8+c]+a[r*4+3]*b[12+c];return o;},
+    mat4Rotate:(ax,ay,az)=>{const sx=Math.sin(ax),cx=Math.cos(ax),sy=Math.sin(ay),cy=Math.cos(ay),sz=Math.sin(az),cz=Math.cos(az);return [cy*cz,cy*sz,-sy,0,sx*sy*cz-cx*sz,sx*sy*sz+cx*cz,sx*cy,0,cx*sy*cz+sx*sz,cx*sy*sz-sx*cz,cx*cy,0,0,0,0,1];},
+    mat4Perspective:(fov,aspect,near,far)=>{const f=1/Math.tan(fov/2),nf=1/(near-far);return [f/aspect,0,0,0,0,f,0,0,0,0,(far+near)*nf,-1,0,0,2*far*near*nf,0];},
+    transformVertices:(arr,mat,screenW=240,screenH=320,scale=200,distZ=3)=>{
+      const hw=screenW*0.5,hh=screenH*0.5;
+      const isObj=arr.length>0&&typeof arr[0]==='object';
+      if(isObj){
+        return arr.map(v=>{
+          const tx=v.x*mat[0]+v.y*mat[4]+v.z*mat[8]+mat[12],ty=v.x*mat[1]+v.y*mat[5]+v.z*mat[9]+mat[13],tz=v.x*mat[2]+v.y*mat[6]+v.z*mat[10]+mat[14];
+          const zc=Math.max(0.001,tz+distZ);
+          return {x:tx,y:ty,z:tz,px:(tx/zc)*scale+hw,py:(ty/zc)*scale+hh};
+        });
+      }
+      const out=[];
+      for(let i=0;i+2<arr.length;i+=3){
+        const x=arr[i],y=arr[i+1],z=arr[i+2];
+        const tx=x*mat[0]+y*mat[4]+z*mat[8]+mat[12],ty=x*mat[1]+y*mat[5]+z*mat[9]+mat[13],tz=x*mat[2]+y*mat[6]+z*mat[10]+mat[14];
+        const zc=Math.max(0.001,tz+distZ);
+        out.push((tx/zc)*scale+hw,(ty/zc)*scale+hh);
+      }
+      return out;
+    },
+    arraySum:a=>a.reduce((s,v)=>s+v,0),
+    arrayMinMax:a=>{if(!a.length)return null;let mn=Infinity,mx=-Infinity;for(const v of a){if(v<mn)mn=v;if(v>mx)mx=v;}return {min:mn,max:mx};},
+    arrayDot:(a,b)=>{let s=0;const n=Math.min(a.length,b.length);for(let i=0;i<n;i++)s+=a[i]*b[i];return s;},
+    PI:Math.PI,HALF_PI:Math.PI*0.5,TWO_PI:Math.PI*2,DEG_TO_RAD:Math.PI/180,RAD_TO_DEG:180/Math.PI
+  };
+}
 
 /* ─── PURE SYNCHRONOUS SHA-256 / SHA-512 / HMAC ENGINE ─── */
 function buildCrypto(){
@@ -1172,7 +1222,8 @@ class KryonCloudScreen{
     d.fillRoundRect(8,120,224,44,4,0x18E4);d.drawRoundRect(8,120,224,44,4,0x39E8);
     d.setTextDatum(0);d.setTextColor(TFT_YELLOW,0x18E4);
     d.drawString(this.beamScope==='MAILBOX'?'@ops-node':'@guest-78',14,124,2);
-    d.setTextColor(TFT_WHITE,0x18E4);d.drawString('Node heartbeat verified.',14,142,2);
+    d.setTextColor(TFT_WHITE,0x18E4);
+    d.drawString('Node heartbeat verified.',14,142,2);
   }
   _drawDrive(){
     const d=this.sim.disp;
@@ -1201,6 +1252,8 @@ class KryonCloudScreen{
   _drawPairing(){
     const d=this.sim.disp;d.drawRoundRect(3,3,234,314,5,0x39E8);
     d.setTextColor(TFT_WHITE,TFT_BLACK);d.setTextDatum(4);d.drawString('Pair with KryonCloud',120,80,2);
+    d.drawString('Enter code on dashboard:',120,110,2);
+
     d.fillRoundRect(20,135,200,50,6,0x18E4);d.drawRoundRect(20,135,200,50,6,0x229F);
     d.setTextColor(TFT_YELLOW,0x18E4);d.drawString('KY-8942',120,160,4);
     d.fillRoundRect(40,240,160,34,5,0x229F);d.setTextColor(TFT_WHITE,0x229F);d.drawString('Return Home',120,257,2);
@@ -1365,7 +1418,8 @@ class AppStoreScreen{
   }
   _footer(){
     const d=this.sim.disp;d.drawRoundRect(5,285,230,30,5,TFT_WHITE);d.setTextColor(TFT_WHITE,TFT_BLACK);d.setTextDatum(4);
-    d.drawString('BACK',35,300,2);d.drawString('|',70,300,2);d.drawString('UP',100,300,2);d.drawString('|',130,300,2);d.drawString('SEL',165,300,2);d.drawString('|',200,300,2);d.drawString('DN',220,300,2);
+    d.drawString('BACK',35,300,2);d.drawString('|',70,300,2);d.drawString('UP',100,300,2);d.drawString('|',130,300,2);
+    d.drawString('SEL',165,300,2);d.drawString('|',200,300,2);d.drawString('DN',220,300,2);
   }
   handleTouch(x,y){
     if(this.loading)return;
@@ -1647,9 +1701,16 @@ class Simulator{
     this.kryon3D=new Kryon3DEngine();
 
     this.env={};
-    this.env.FastMath=buildFastMath();this.env.Crypto=buildCrypto();this.env.PWM=buildPWM();this.env.I2C=buildI2C();
-    this.env.Network=buildNetwork(this);this.env.HttpServer=buildHttpServer();this.env.WebSocket=buildWebSocketClass(this);
-    this.env.IPC=buildIPC(this);this.env.AI=buildAI();this.env.FS=buildFS(this);
+    this.env.FastMath=buildFastMath();
+    this.env.Crypto=buildCrypto();
+    this.env.PWM=buildPWM();
+    this.env.I2C=buildI2C();
+    this.env.Network=buildNetwork(this);
+    this.env.HttpServer=buildHttpServer();
+    this.env.WebSocket=buildWebSocketClass(this);
+    this.env.IPC=buildIPC(this);
+    this.env.AI=buildAI();
+    this.env.FS=buildFS(this);
     this.env.System=buildSystem(this,this.disp,this.keyboard,this.notif,this.env.PWM,this.env.I2C,this.env.Crypto,this.env.IPC,this.env.AI,this.env.Network,this.env.HttpServer,this.kryon3D);
 
     this.launcher=new LauncherScreen(this);
@@ -1859,37 +1920,6 @@ class Simulator{
     $('btn-refresh-apps').onclick=()=>this.refreshAppList();
     $('btn-seed-demo').onclick=async()=>{await this.vfs.seedDefaults();this.refreshAppList();this.launcher.scan();this.notif.post('Storage','Demo apps ready','ok');};
     
-    // Set default editor code
-    $('app-code').value=`// Touch Counter Demo
-var bg = System.color(18,18,28);
-System.fillScreen(bg);
-var count = 0;
-
-function drawUI() {
-  System.fillScreen(bg);
-  System.setTextColor(WHITE, bg);
-  System.drawString("Touch Counter", 35, 30, 4);
-  System.setTextColor(CYAN, bg);
-  System.drawString("Count: " + count, 75, 110, 4);
-  System.fillRoundRect(30, 200, 180, 50, 8, GREEN);
-  System.setTextColor(BLACK, GREEN);
-  System.drawString("TAP TO COUNT", 45, 215, 2);
-}
-
-drawUI();
-
-while (true) {
-  var t = System.getTouch();
-  if (t.touched) {
-    if (t.y >= 200 && t.y <= 250 && t.x >= 30 && t.x <= 210) {
-      count++;
-      PWM.setTone(18, 1200 + count * 40, 60);
-      drawUI();
-    }
-  }
-  System.delay(40);
-}`;
-
     $('btn-install').onclick=()=>{
       const name=$('app-name').value.trim()||'Crypto Workbench';
       const pkg=$('app-pkg').value.trim().toLowerCase()||'com.kryonos.cryptotest';
