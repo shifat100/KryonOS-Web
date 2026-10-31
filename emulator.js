@@ -1,0 +1,1942 @@
+'use strict';
+
+// 1:1 Palette matching TFT_eSPI
+const TFT_BLACK=0x0000,TFT_WHITE=0xFFFF,TFT_RED=0xF800,TFT_GREEN=0x07E0;
+const TFT_BLUE=0x001F,TFT_YELLOW=0xFFE0,TFT_CYAN=0x07FF,TFT_MAGENTA=0xF81F;
+const TFT_ORANGE=0xFD20,TFT_DARKGREY=0x7BEF,TFT_LIGHTGREY=0xC618;
+const TFT_PURPLE=0x780F,TFT_NAVY=0x000F,TFT_GOLD=0xFEA0;
+const KRYONOS_VERSION="2.0.0",KRYONOS_API_LEVEL=2;
+
+const S={
+  LAUNCHER:0,SETTINGS:1,RUN_APP:2,INSTALLER:3,CALIBRATOR:4,WEB_APP:5,
+  SETTINGS_WIFI:6,SETTINGS_ABOUT:7,SETTINGS_APPS:8,SETTINGS_TIME:9,
+  SETTINGS_TIME_MANUAL:10,UPDATER_BOOT:11,UPDATER_MANUAL:12,APP_STORE:13,
+  HELP_CENTER:14,SETTINGS_WIFI_SAVED:15,KRYON_CLOUD:16,SETTINGS_PERMISSIONS:17
+};
+
+const $=id=>document.getElementById(id);
+const consoleEl=$('console');
+function log(msg,cls){
+  const d=document.createElement('div');
+  if(cls)d.className=cls;
+  d.textContent=`[${new Date().toLocaleTimeString('en-GB',{hour12:false})}] ${msg}`;
+  consoleEl.appendChild(d);
+  while(consoleEl.children.length>500)consoleEl.removeChild(consoleEl.firstChild);
+  consoleEl.scrollTop=consoleEl.scrollHeight;
+}
+const escapeRegex=s=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+const sleep=ms=>new Promise(r=>setTimeout(r,Math.max(0,ms|0)));
+const clamp=(v,a,b)=>v<a?a:(v>b?b:v);
+
+class AudioPWM{
+  constructor(){this.ctx=null;this.oscs=new Map();}
+  _ensure(){
+    if(!this.ctx){const AC=window.AudioContext||window.webkitAudioContext;if(AC)this.ctx=new AC();}
+    if(this.ctx&&this.ctx.state==='suspended')this.ctx.resume();
+  }
+  setTone(pin,freq,dur=0){
+    try{
+      this._ensure();if(!this.ctx)return;this.stopTone(pin);if(freq<=0)return;
+      const o=this.ctx.createOscillator(),g=this.ctx.createGain();
+      o.type='square';o.frequency.value=freq;g.gain.value=0.05;
+      o.connect(g);g.connect(this.ctx.destination);o.start();
+      this.oscs.set(pin,{osc:o,gain:g});
+      if(dur>0)setTimeout(()=>this.stopTone(pin),dur);
+    }catch(e){}
+  }
+  stopTone(pin){
+    const it=this.oscs.get(pin);
+    if(it){try{it.gain.gain.value=0;it.osc.stop();it.osc.disconnect();}catch(e){}this.oscs.delete(pin);}
+  }
+  reset(){for(const p of [...this.oscs.keys()])this.stopTone(p);}
+}
+const audioHW=new AudioPWM();
+
+class VFS{
+  constructor(sim){this.sim=sim;this.dbName='KryonOS_VFS_v9';this.store='files';this.db=null;this.cache=new Map();}
+  async init(){
+    return new Promise(resolve=>{
+      try{
+        const req=indexedDB.open(this.dbName,1);
+        req.onupgradeneeded=e=>{
+          const db=e.target.result;
+          if(!db.objectStoreNames.contains(this.store))db.createObjectStore(this.store,{keyPath:'path'});
+        };
+        req.onsuccess=async e=>{
+          this.db=e.target.result;await this._load();
+          if(this.cache.size===0)await this.seedDefaults();
+          resolve();
+        };
+        req.onerror=()=>{this.seedDefaults().then(resolve);};
+      }catch(e){this.seedDefaults().then(resolve);}
+    });
+  }
+  _load(){
+    return new Promise(resolve=>{
+      if(!this.db)return resolve();
+      const tx=this.db.transaction(this.store,'readonly');
+      const req=tx.objectStore(this.store).getAll();
+      req.onsuccess=()=>{this.cache.clear();(req.result||[]).forEach(it=>this.cache.set(it.path,it));resolve();};
+      req.onerror=()=>resolve();
+    });
+  }
+  _norm(p){let c=String(p||'').replace(/\/+/g,'/');if(c.length>1&&c.endsWith('/'))c=c.slice(0,-1);if(!c.startsWith('/'))c='/'+c;return c;}
+  async seedDefaults(){
+    for(const d of ['/local','/local/apps','/local/system','/local/tmp_download','/sd','/sd/apps','/sd/system'])this._put(d,null,true,false);
+    this._installDemo('com.kryon.calc',{name:'Calculator',packageName:'com.kryon.calc',version:'1.0.0',api:1,author:'KryonTeam',category:'Utility',type:'App',description:'Standard utility calculator.',permissions:[]},
+`System.fillScreen(System.color(20,20,30));
+System.setTextColor(WHITE, System.color(20,20,30));
+System.drawString("Calculator", 55, 30, 4);
+System.fillRoundRect(20, 100, 200, 40, 6, BLUE);
+System.setTextColor(WHITE, BLUE);
+System.drawString("Tap to beep", 70, 112, 2);
+while (true) {
+  var t = System.getTouch();
+  if (t.touched) { PWM.setTone(18, 1400, 100); System.notify("Calc", "Button pressed", "info", 1500); }
+  System.delay(40);
+}`);
+    this._put('/local/system/wifi_credentials.enc',btoa(JSON.stringify([{ssid:'KryonOS_Sim',password:'kryon1234',lastConnected:Date.now()}])),false,false);
+    this._put('/local/system/app_permissions.json',JSON.stringify({'com.kryon.calc':['storage']},null,2),false,false);
+    await this._persistAll();
+  }
+  _installDemo(pkg,meta,code){
+    const dir='/local/apps/'+pkg;
+    this._put(dir,null,true,false);
+    this._put(dir+'/app.json',JSON.stringify(meta,null,2),false,false);
+    this._put(dir+'/main.js',code,false,false);
+  }
+  _persistAll(){
+    if(!this.db)return Promise.resolve();
+    return new Promise(resolve=>{
+      const tx=this.db.transaction(this.store,'readwrite');
+      const store=tx.objectStore(this.store);
+      for(const it of this.cache.values())store.put(it);
+      tx.oncomplete=()=>resolve();
+      tx.onerror=()=>resolve();
+    });
+  }
+  _put(path,content,isDir=false,notify=true){
+    const clean=this._norm(path);
+    const rec={path:clean,content:isDir?null:String(content!=null?content:''),isDir,size:isDir?0:(content?String(content).length:0),modified:Date.now()};
+    this.cache.set(clean,rec);
+    if(this.db){try{const tx=this.db.transaction(this.store,'readwrite');tx.objectStore(this.store).put(rec);}catch(e){}}
+    if(notify&&this.sim)this.sim.onStorageChanged();
+    return true;
+  }
+  exists(p){return this.cache.has(this._norm(p));}
+  isDir(p){const it=this.cache.get(this._norm(p));return it?it.isDir:false;}
+  isFile(p){const it=this.cache.get(this._norm(p));return it?!it.isDir:false;}
+  read(p){const it=this.cache.get(this._norm(p));return (it&&!it.isDir)?it.content:'';}
+  write(p,c){if(!p)return false;this._mkparent(p);return this._put(p,c,false,true);}
+  append(p,c){return this.write(p,this.read(p)+String(c));}
+  mkdir(p){const clean=this._norm(p);if(this.cache.has(clean))return true;this._mkparent(clean);return this._put(clean,null,true,true);}
+  remove(p){
+    const clean=this._norm(p);this.cache.delete(clean);
+    for(const k of [...this.cache.keys()])if(k.startsWith(clean+'/'))this.cache.delete(k);
+    if(this.db){try{const tx=this.db.transaction(this.store,'readwrite');const store=tx.objectStore(this.store);store.delete(clean);}catch(e){}}
+    if(this.sim)this.sim.onStorageChanged();
+    return true;
+  }
+  rename(from,to){const f=this._norm(from),t=this._norm(to);const it=this.cache.get(f);if(!it)return false;this.remove(f);return this._put(t,it.content,it.isDir,true);}
+  listDir(p){const clean=this._norm(p);const pre=clean.endsWith('/')?clean:clean+'/';const out=[];for(const k of this.cache.keys()){if(k.startsWith(pre)&&k!==clean){const sub=k.substring(pre.length);if(!sub.includes('/'))out.push(k);}}return out;}
+  listDirFull(p){const clean=this._norm(p);const pre=clean.endsWith('/')?clean:clean+'/';const out=[];for(const [k,it] of this.cache.entries()){if(k.startsWith(pre)&&k!==clean){const sub=k.substring(pre.length);if(!sub.includes('/'))out.push({name:sub,path:k,isDir:it.isDir,size:it.size});}}return out;}
+  size(p){const it=this.cache.get(this._norm(p));return it?it.size:0;}
+  totalSpace(){return 16*1024*1024;}
+  usedSpace(){let t=0;for(const it of this.cache.values())t+=it.size;return t;}
+  freeSpace(){return this.totalSpace()-this.usedSpace();}
+  _mkparent(p){const parts=this._norm(p).split('/').filter(Boolean);let cur='';for(let i=0;i<parts.length-1;i++){cur+='/'+parts[i];if(!this.cache.has(cur))this._put(cur,null,true,false);}}
+  async reset(){if(this.db){const tx=this.db.transaction(this.store,'readwrite');tx.objectStore(this.store).clear();}this.cache.clear();await this.seedDefaults();log('Flash formatted, defaults restored.','warn');}
+  md5(p){const content=this.read(p);let h=0x811c9dc5;for(let i=0;i<content.length;i++){h^=content.charCodeAt(i);h=(h*0x01000193)>>>0;}const seed=h.toString(16).padStart(8,'0');return (seed+seed+seed+seed).slice(0,32);}
+}
+
+class TFTDisplay{
+  constructor(canvas){
+    this.canvas=canvas;this.ctx=canvas.getContext('2d',{alpha:false});this.ctx.imageSmoothingEnabled=false;
+    this.W=canvas.width;this.H=canvas.height;this.fg='#fff';this.bg=null;this.size=1;this.datum=0;
+    this.activeSprite=null;this.spriteBound=false;this.clear();
+  }
+  clear(){this.ctx.fillStyle='#000';this.ctx.fillRect(0,0,this.W,this.H);}
+  resetState(){this.fg='#fff';this.bg=null;this.size=1;this.datum=0;}
+  static c565(c){
+    const r=((c>>11)&0x1F)*255/31|0,g=((c>>5)&0x3F)*255/63|0,b=(c&0x1F)*255/31|0;
+    return `rgb(${r},${g},${b})`;
+  }
+  _t(){return (this.activeSprite&&this.spriteBound)?this.activeSprite.ctx:this.ctx;}
+  _w(){return (this.activeSprite&&this.spriteBound)?this.activeSprite.canvas.width:this.W;}
+  _h(){return (this.activeSprite&&this.spriteBound)?this.activeSprite.canvas.height:this.H;}
+  fillScreen(c){const x=this._t();x.fillStyle=TFTDisplay.c565(c);x.fillRect(0,0,this._w(),this._h());}
+  fillRect(x,y,w,h,c){if(w<=0||h<=0)return;const t=this._t();t.fillStyle=TFTDisplay.c565(c);t.fillRect(x,y,w,h);}
+  drawRect(x,y,w,h,c){const t=this._t();t.strokeStyle=TFTDisplay.c565(c);t.lineWidth=1;t.strokeRect(x+.5,y+.5,Math.max(0,w-1),Math.max(0,h-1));}
+  drawLine(x0,y0,x1,y1,c){const t=this._t();t.strokeStyle=TFTDisplay.c565(c);t.lineWidth=1;t.beginPath();t.moveTo(x0+.5,y0+.5);t.lineTo(x1+.5,y1+.5);t.stroke();}
+  drawFastHLine(x,y,w,c){this.drawLine(x,y,x+w-1,y,c);}
+  drawFastVLine(x,y,h,c){this.drawLine(x,y,x,y+h-1,c);}
+  drawPixel(x,y,c){const t=this._t();t.fillStyle=TFTDisplay.c565(c);t.fillRect(x,y,1,1);}
+  drawCircle(x,y,r,c){const t=this._t();t.strokeStyle=TFTDisplay.c565(c);t.beginPath();t.arc(x,y,Math.abs(r),0,Math.PI*2);t.stroke();}
+  fillCircle(x,y,r,c){const t=this._t();t.fillStyle=TFTDisplay.c565(c);t.beginPath();t.arc(x,y,Math.abs(r),0,Math.PI*2);t.fill();}
+  drawTriangle(x0,y0,x1,y1,x2,y2,c){this.drawLine(x0,y0,x1,y1,c);this.drawLine(x1,y1,x2,y2,c);this.drawLine(x2,y2,x0,y0,c);}
+  fillTriangle(x0,y0,x1,y1,x2,y2,c){const t=this._t();t.fillStyle=TFTDisplay.c565(c);t.beginPath();t.moveTo(x0,y0);t.lineTo(x1,y1);t.lineTo(x2,y2);t.closePath();t.fill();}
+  _rr(t,x,y,w,h,r){r=Math.min(r,w/2,h/2);t.beginPath();t.moveTo(x+r,y);t.arcTo(x+w,y,x+w,y+h,r);t.arcTo(x+w,y+h,x,y+h,r);t.arcTo(x,y+h,x,y,r);t.arcTo(x,y,x+w,y,r);t.closePath();}
+  drawRoundRect(x,y,w,h,r,c){const t=this._t();t.strokeStyle=TFTDisplay.c565(c);t.lineWidth=1;this._rr(t,x+.5,y+.5,Math.max(0,w-1),Math.max(0,h-1),r);t.stroke();}
+  fillRoundRect(x,y,w,h,r,c){if(w<=0||h<=0)return;const t=this._t();t.fillStyle=TFTDisplay.c565(c);this._rr(t,x,y,w,h,r);t.fill();}
+  setTextColor(fg,bg){this.fg=TFTDisplay.c565(fg);this.bg=(bg!=null)?TFTDisplay.c565(bg):null;}
+  setTextDatum(d){this.datum=d;}
+  setTextSize(s){this.size=Math.max(1,s|0);}
+  drawString(str,x,y,font=2){
+    const t=this._t();
+    const base=({1:9,2:14,4:26,6:44,7:44,8:56})[font]||14;
+    const sz=Math.max(6,Math.floor(base*this.size));
+    t.font=`bold ${sz}px "Courier New",monospace`;
+    str=String(str!=null?str:'');
+    const w=t.measureText(str).width;
+    let rx=x,ry=y;
+    if(this.datum===1){rx=x-w/2;}
+    else if(this.datum===4){rx=x-w/2;ry=y-sz/2;}
+    else if(this.datum===3){ry=y-sz/2;}
+    t.textBaseline='top';t.textAlign='left';
+    if(this.bg){t.fillStyle=this.bg;t.fillRect(rx,ry,w,sz);}
+    t.fillStyle=this.fg;t.fillText(str,rx,ry);
+  }
+  color(r,g,b){r=clamp(r|0,0,255);g=clamp(g|0,0,255);b=clamp(b|0,0,255);return ((r&0xF8)<<8)|((g&0xFC)<<3)|(b>>3);}
+}
+
+class VirtualSprite{
+  constructor(w,h){
+    this.canvas=document.createElement('canvas');this.canvas.width=Math.max(1,w|0);this.canvas.height=Math.max(1,h|0);
+    this.ctx=this.canvas.getContext('2d',{alpha:false});this.ctx.imageSmoothingEnabled=false;this.fill(0x0000);
+  }
+  fill(c){this.ctx.fillStyle=TFTDisplay.c565(c);this.ctx.fillRect(0,0,this.canvas.width,this.canvas.height);}
+}
+
+class Kryon3DEngine{
+  constructor(){this.reset();}
+  reset(){
+    this.sprite=null;this.directDraw=false;this.vpX=0;this.vpY=0;this.vpW=0;this.vpH=0;
+    this.camPos=[0,0,-5];this.camTarget=[0,0,0];this.camFov=60;
+    this.lightDir=[0.577,-0.577,0.577];this.lightAmbient=0.3;this.lightDiffuse=0.7;
+    this.fog={enabled:false,color:0x0000,near:5,far:20};
+  }
+  begin(w,h){this.end();this.sprite=new VirtualSprite(w,h);this.vpX=0;this.vpY=0;this.vpW=w;this.vpH=h;return true;}
+  clear(c=0){if(this.sprite)this.sprite.fill(c);}
+  end(){this.sprite=null;}
+  setViewport(x,y,w,h){this.vpX=x;this.vpY=y;this.vpW=w;this.vpH=h;}
+  setCamera(px,py,pz,tx,ty,tz,fov){this.camPos=[px,py,pz];this.camTarget=[tx,ty,tz];if(fov!=null)this.camFov=fov;}
+  setLight(lx,ly,lz,amb,dif){const l=Math.hypot(lx,ly,lz);if(l>1e-4)this.lightDir=[lx/l,ly/l,lz/l];if(amb!=null)this.lightAmbient=amb;if(dif!=null)this.lightDiffuse=dif;}
+  setFog(e,c,n,f){this.fog.enabled=!!e;if(c!=null)this.fog.color=c;if(n!=null)this.fog.near=n;if(f!=null)this.fog.far=f;}
+  project(wx,wy,wz){
+    const [cx,cy,cz]=this.camPos,[tx,ty,tz]=this.camTarget;
+    let fx=tx-cx,fy=ty-cy,fz=tz-cz;const fl=Math.hypot(fx,fy,fz);if(fl<1e-4){fx=0;fy=0;fz=1;}else{fx/=fl;fy/=fl;fz/=fl;}
+    let rx=fy*0-fz*1,ry=fz*0-fx*0,rz=fx*1-fy*0;const rl=Math.hypot(rx,ry,rz);if(rl<1e-4){rx=1;ry=0;rz=0;}else{rx/=rl;ry/=rl;rz/=rl;}
+    const ux=ry*fz-rz*fy,uy=rz*fx-rx*fz,uz=rx*fy-ry*fx;
+    const dx=wx-cx,dy=wy-cy,dz=wz-cz;
+    const ecx=dx*rx+dy*ry+dz*rz,ecy=dx*ux+dy*uy+dz*uz,ecz=dx*fx+dy*fy+dz*fz;
+    if(ecz<=0.05)return null;
+    const tanHalf=Math.tan(this.camFov*0.5*Math.PI/180)||0.001;
+    const scale=(this.vpW*0.5)/tanHalf;
+    return {x:(ecx/ecz)*scale+this.vpW*0.5+this.vpX,y:-(ecy/ecz)*scale+this.vpH*0.5+this.vpY,z:ecz};
+  }
+  _shade(base,nx,ny,nz){
+    const [lx,ly,lz]=this.lightDir;let dot=nx*lx+ny*ly+nz*lz;if(dot<0)dot=0;
+    let i=this.lightAmbient+this.lightDiffuse*dot;i=clamp(i,0,1);
+    const r5=(base>>11)&0x1F,g6=(base>>5)&0x3F,b5=base&0x1F;
+    const r8=(r5*527+23)>>6,g8=(g6*259+33)>>6,b8=(b5*527+23)>>6;
+    return (((r8*i)|0)&0xF8)<<8|(((g8*i)|0)&0xFC)<<3|(((b8*i)|0)>>3);
+  }
+  _fog(c,z){
+    if(!this.fog.enabled)return c;
+    const f=clamp((z-this.fog.near)/(this.fog.far-this.fog.near),0,1);if(f<=0)return c;
+    const c1={r:(c>>11&0x1F)*255/31|0,g:(c>>5&0x3F)*255/63|0,b:(c&0x1F)*255/31|0};
+    const c2={r:(this.fog.color>>11&0x1F)*255/31|0,g:(this.fog.color>>5&0x3F)*255/63|0,b:(this.fog.color&0x1F)*255/31|0};
+    return (((c1.r*(1-f)+c2.r*f)|0)&0xF8)<<8|(((c1.g*(1-f)+c2.g*f)|0)&0xFC)<<3|(((c1.b*(1-f)+c2.b*f)|0)>>3);
+  }
+  drawLine(x0,y0,z0,x1,y1,z1,c){
+    if(!this.sprite)return;const p0=this.project(x0,y0,z0),p1=this.project(x1,y1,z1);if(!p0||!p1)return;
+    const ctx=this.sprite.ctx;ctx.strokeStyle=TFTDisplay.c565(c);ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(p0.x,p0.y);ctx.lineTo(p1.x,p1.y);ctx.stroke();
+  }
+  drawTriangle(x0,y0,z0,x1,y1,z1,x2,y2,z2,c){this.drawLine(x0,y0,z0,x1,y1,z1,c);this.drawLine(x1,y1,z1,x2,y2,z2,c);this.drawLine(x2,y2,z2,x0,y0,z0,c);}
+  fillTriangle(x0,y0,z0,x1,y1,z1,x2,y2,z2,c,lighting=true){
+    if(!this.sprite)return;
+    const v01=[x1-x0,y1-y0,z1-z0],v02=[x2-x0,y2-y0,z2-z0];
+    let nx=v01[1]*v02[2]-v01[2]*v02[1],ny=v01[2]*v02[0]-v01[0]*v02[2],nz=v01[0]*v02[1]-v01[1]*v02[0];
+    const nl=Math.hypot(nx,ny,nz);if(nl<1e-4)return;nx/=nl;ny/=nl;nz/=nl;
+    const vdx=this.camPos[0]-x0,vdy=this.camPos[1]-y0,vdz=this.camPos[2]-z0;if(nx*vdx+ny*vdy+nz*vdz<=0)return;
+    const p0=this.project(x0,y0,z0),p1=this.project(x1,y1,z1),p2=this.project(x2,y2,z2);if(!p0||!p1||!p2)return;
+    let col=c;if(lighting)col=this._shade(c,nx,ny,nz);col=this._fog(col,(p0.z+p1.z+p2.z)/3);
+    const ctx=this.sprite.ctx;ctx.fillStyle=TFTDisplay.c565(col);
+    ctx.beginPath();ctx.moveTo(p0.x,p0.y);ctx.lineTo(p1.x,p1.y);ctx.lineTo(p2.x,p2.y);ctx.closePath();ctx.fill();
+  }
+  drawCube(cx,cy,cz,sx,sy,sz,rx,ry,rz,c,lighting=true){
+    const hx=sx/2,hy=sy/2,hz=sz/2;
+    const v=[[-hx,-hy,-hz],[hx,-hy,-hz],[hx,hy,-hz],[-hx,hy,-hz],[-hx,-hy,hz],[hx,-hy,hz],[hx,hy,hz],[-hx,hy,hz]];
+    const srx=Math.sin(rx),crx=Math.cos(rx),sry=Math.sin(ry),cry=Math.cos(ry),srz=Math.sin(rz),crz=Math.cos(rz);
+    const w=v.map(([x,y,z])=>{
+      const y1=y*crx-z*srx,z1=y*srx+z*crx;
+      const x2=x*cry+z1*sry,z2=-x*sry+z1*cry;
+      const x3=x2*crz-y1*srz,y3=x2*srz+y1*crz;
+      return [cx+x3,cy+y3,cz+z2];
+    });
+    const faces=[[0,1,2],[0,2,3],[5,4,7],[5,7,6],[4,0,3],[4,3,7],[1,5,6],[1,6,2],[3,2,6],[3,6,7],[4,5,1],[4,1,0]];
+    for(const [a,b,cc] of faces)this.fillTriangle(w[a][0],w[a][1],w[a][2],w[b][0],w[b][1],w[b][2],w[cc][0],w[cc][1],w[cc][2],c,lighting);
+  }
+  drawBillboard(x,y,z,w,h,c){
+    if(!this.sprite)return;const p=this.project(x,y,z);if(!p)return;
+    const tanHalf=Math.tan(this.camFov*0.5*Math.PI/180)||0.001;const scale=(this.vpW*0.5)/tanHalf;
+    const sw=(w/p.z)*scale,sh=(h/p.z)*scale;if(sw<=0||sh<=0)return;
+    const ctx=this.sprite.ctx;ctx.fillStyle=TFTDisplay.c565(c);ctx.fillRect(p.x-sw/2,p.y-sh/2,sw,sh);
+  }
+  drawMesh(verts,faces,mat,c,lighting=true){
+    if(!this.sprite||!Array.isArray(verts)||!Array.isArray(faces))return;
+    const m=mat||[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1];const tv=[];
+    for(let i=0;i+2<verts.length;i+=3){
+      const x=verts[i],y=verts[i+1],z=verts[i+2];
+      tv.push([x*m[0]+y*m[4]+z*m[8]+m[12],x*m[1]+y*m[5]+z*m[9]+m[13],x*m[2]+y*m[6]+z*m[10]+m[14]]);
+    }
+    for(const face of faces){
+      if(!Array.isArray(face)||face.length<3)continue;
+      const [i0,i1,i2]=face;if(!tv[i0]||!tv[i1]||!tv[i2])continue;
+      const fc=(face.length>=4&&typeof face[3]==='number')?face[3]:c;
+      this.fillTriangle(tv[i0][0],tv[i0][1],tv[i0][2],tv[i1][0],tv[i1][1],tv[i1][2],tv[i2][0],tv[i2][1],tv[i2][2],fc,lighting);
+    }
+  }
+  getWidth(){return this.sprite?this.sprite.canvas.width:0;}
+  getHeight(){return this.sprite?this.sprite.canvas.height:0;}
+  directDraw(v){if(v!=null)this.directDraw=!!v;return this.directDraw;}
+}
+
+class NotificationOverlay{
+  constructor(sim){this.sim=sim;this.queue=[];this.nextId=1;this.ANIM=180;this.REST=8;this.HIDDEN=-44;this.CX=8;this.CW=224;this.CH=42;this.CR=6;}
+  post(title,message,icon='info',dur=3000){
+    const id=this.nextId++;let t='info';const s=String(icon).toLowerCase();
+    if(s.includes('warn'))t='warn';else if(s.includes('err')||s.includes('danger'))t='error';else if(s.includes('succ')||s.includes('ok'))t='success';
+    this.queue.push({id,title:String(title||'Notification').substring(0,24),message:String(message||'').substring(0,48),iconType:t,durationMs:clamp(dur||3000,500,15000),state:'SLIDE_IN',currentY:this.HIDDEN,animStart:performance.now(),displayStart:0});
+    log(`[Notify #${id}] ${title}: ${message}`,'ok');
+    return id;
+  }
+  dismiss(id){
+    if(!this.queue.length)return false;const i=this.queue.findIndex(n=>n.id===id);if(i===-1)return false;
+    if(i===0){if(this.queue[0].state!=='SLIDE_OUT'){this.queue[0].state='SLIDE_OUT';this.queue[0].animStart=performance.now();}}else this.queue.splice(i,1);
+    return true;
+  }
+  clearAll(){this.queue=[];this.render();}
+  render(){
+    const oc=this.sim.overlayCtx;oc.clearRect(0,0,this.sim.overlayCanvas.width,this.sim.overlayCanvas.height);
+    if(!this.queue.length)return;const it=this.queue[0];const now=performance.now();let y=it.currentY;
+    if(it.state==='SLIDE_IN'){const e=now-it.animStart;if(e>=this.ANIM){y=this.REST;it.state='DISPLAYING';it.displayStart=now;}else{const t=e/this.ANIM,ea=1-Math.pow(1-t,3);y=this.HIDDEN+(this.REST-this.HIDDEN)*ea;}}
+    else if(it.state==='DISPLAYING'){y=this.REST;if(now-it.displayStart>=it.durationMs){it.state='SLIDE_OUT';it.animStart=now;}}
+    else if(it.state==='SLIDE_OUT'){const e=now-it.animStart;if(e>=this.ANIM){this.queue.shift();if(this.queue.length){this.queue[0].state='SLIDE_IN';this.queue[0].currentY=this.HIDDEN;this.queue[0].animStart=performance.now();}return;}const t=e/this.ANIM,ea=t*t*t;y=this.REST+(this.HIDDEN-this.REST)*ea;}
+    it.currentY=y;
+    const ctx=oc;let border='#00f0ff',badge='#007acc',text='i';
+    if(it.iconType==='success'){border='#00e676';badge='#00e676';text='✓';}
+    else if(it.iconType==='warn'){border='#ffb300';badge='#ffb300';text='!';}
+    else if(it.iconType==='error'){border='#ff3d00';badge='#ff3d00';text='✕';}
+    const rx=this.CX,r=this.CR,y0=Math.round(y);
+    ctx.fillStyle='#0d1120';ctx.strokeStyle=border;ctx.lineWidth=1.5;
+    ctx.beginPath();ctx.moveTo(rx+r,y0);ctx.arcTo(rx+this.CW,y0,rx+this.CW,y0+this.CH,r);ctx.arcTo(rx+this.CW,y0+this.CH,rx,y0+this.CH,r);ctx.arcTo(rx,y0+this.CH,rx,y0,r);ctx.arcTo(rx,y0,rx+this.CW,y0,r);ctx.closePath();ctx.fill();ctx.stroke();
+    ctx.beginPath();ctx.arc(rx+16,y0+21,10,0,Math.PI*2);ctx.fillStyle=badge;ctx.fill();
+    ctx.font='bold 11px sans-serif';ctx.fillStyle='#000';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,rx+16,y0+21);
+    ctx.font='bold 12px "Courier New",monospace';ctx.fillStyle='#fff';ctx.textAlign='left';ctx.textBaseline='top';ctx.fillText(it.title,rx+34,y0+6);
+    ctx.font='10px "Courier New",monospace';ctx.fillStyle='#b0b8c4';ctx.fillText(it.message,rx+34,y0+24);
+  }
+}
+
+class OnScreenKeyboard{
+  constructor(sim){
+    this.sim=sim;this.active=false;this.text='';this.caps=false;this.resolve=null;this.prompt='';this.maxLen=30;
+    this.keyset=[
+      [['1','!'],['2','@'],['3','#'],['4','$'],['5','%'],['6','^'],['7','&'],['8','*'],['9','('],['0',')'],['-','_'],['=','+']],
+      [['q','Q'],['w','W'],['e','E'],['r','R'],['t','T'],['y','Y'],['u','U'],['i','I'],['o','O'],['p','P'],['[','{'],[']','}']],
+      [['a','A'],['s','S'],['d','D'],['f','F'],['g','G'],['h','H'],['j','J'],['k','K'],['l','L'],[';',':'],["'",'"'],['\\','|']],
+      [['`','~'],['z','Z'],['x','X'],['c','C'],['v','V'],['b','B'],['n','N'],['m','M'],[',','<'],['.','>'],['/','?'],[' ',' ']]
+    ];
+  }
+  show(prompt,initial='',maxLen=30){
+    this.sim.touch.touched=false;this.sim.touch.justPressed=false;
+    this.text=String(initial!=null?initial:'');this.caps=false;this.active=true;this.prompt=prompt||'Input';this.maxLen=maxLen;
+    this._draw();
+    return new Promise(res=>{this.resolve=res;});
+  }
+  _draw(){
+    const d=this.sim.disp;d.fillScreen(TFT_BLACK);d.setTextDatum(0);d.setTextColor(TFT_GREEN,TFT_BLACK);
+    d.drawString(this.prompt.substring(0,26),5,10,2);d.drawRect(5,30,230,30,TFT_GREEN);d.setTextColor(TFT_WHITE,TFT_BLACK);
+    const disp=this.text.length>18?this.text.slice(-18):this.text;d.drawString(disp+'_',10,38,2);
+    const btnW=48;const btns=['OK',this.caps?'abc':'ABC','DEL','SPACE','ESC'];
+    for(let i=0;i<5;i++){
+      d.drawRect(i*btnW,70,btnW,30,TFT_GREEN);d.setTextColor(TFT_WHITE,TFT_BLACK);d.setTextDatum(4);d.drawString(btns[i],i*btnW+btnW/2,85,2);
+    }
+    const kw=12,kh=4;const keyW=240/kw,keyH=(320-110)/kh;
+    for(let y=0;y<kh;y++){
+      for(let x=0;x<kw;x++){
+        const px=x*keyW,py=110+y*keyH;d.drawRect(px,py,keyW,keyH,TFT_DARKGREY);
+        const c=this.caps?this.keyset[y][x][1]:this.keyset[y][x][0];
+        d.setTextColor(TFT_WHITE,TFT_BLACK);d.setTextDatum(4);d.drawString(c,px+keyW/2,py+keyH/2,2);
+      }
+    }
+    d.setTextDatum(0);
+  }
+  handleTouch(x,y){
+    if(y>=70&&y<=100){
+      const idx=Math.floor(x/48);
+      if(idx===0)this._finish(this.text);
+      else if(idx===1){this.caps=!this.caps;this._draw();}
+      else if(idx===2){if(this.text.length>0)this.text=this.text.slice(0,-1);this._draw();}
+      else if(idx===3){if(this.text.length<this.maxLen)this.text+=' ';this._draw();}
+      else this._finish('');
+      return;
+    }
+    if(y>=110){
+      const kw=12,kh=4;const keyW=240/kw,keyH=(320-110)/kh;
+      const kx=Math.floor(x/keyW),ky=Math.floor((y-110)/keyH);
+      if(kx>=0&&kx<kw&&ky>=0&&ky<kh){
+        const c=this.caps?this.keyset[ky][kx][1]:this.keyset[ky][kx][0];
+        if(this.text.length<this.maxLen)this.text+=c;this._draw();
+      }
+    }
+  }
+  _finish(val){if(!this.active)return;this.active=false;const r=this.resolve;this.resolve=null;if(r)r(val);}
+}
+
+function shieldTokens(src){
+  const tokens=[];let i=0,out='';
+  while(i<src.length){
+    const c=src[i];
+    if(c==='"'||c==="'"||c==='`'){
+      const q=c;let j=i+1;while(j<src.length&&src[j]!==q){if(src[j]==='\\')j++;j++;}
+      tokens.push(src.substring(i,Math.min(j+1,src.length)));out+='\x00S'+(tokens.length-1)+'\x00';i=j+1;
+    }else if(c==='/'&&src[i+1]==='/'){
+      let end=src.indexOf('\n',i);if(end===-1)end=src.length;
+      tokens.push(src.substring(i,end));out+='\x00C'+(tokens.length-1)+'\x00';i=end;
+    }else if(c==='/'&&src[i+1]==='*'){
+      let end=src.indexOf('*/',i+2);end=end===-1?src.length:end+2;
+      tokens.push(src.substring(i,end));out+='\x00C'+(tokens.length-1)+'\x00';i=end;
+    }else{out+=c;i++;}
+  }
+  return {code:out,tokens};
+}
+function restoreTokens(code,tokens){return code.replace(/\x00([SC])(\d+)\x00/g,(m,t,idx)=>tokens[parseInt(idx,10)]);}
+
+function transpile(src){
+  if(/\basync\s+function\b/.test(src)||/\basync\s*\(/.test(src)||/\basync\s+[A-Za-z_$][\w$]*\s*=>/.test(src)||/(^|[^\w$])await\s/.test(src)||/\bnew\s+Promise\b/.test(src)){
+    throw new Error('Duktape 2.7 runtime: async/await/Promise not supported. Use System.delay() instead.');
+  }
+  const needsAsync=/\bSystem\s*\.\s*(?:delay|delayMicroseconds|prompt)\s*\(/.test(src);
+  if(!needsAsync)return src;
+  const {code:shielded,tokens}=shieldTokens(src);
+  let code=shielded;
+  code=code.replace(/\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/g,'async function $1(');
+  code=code.replace(/\bfunction\s*\(/g,'async function (');
+  code=code.replace(/(\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>\s*\{/g,'async $1 => {');
+  const KW=new Set(['if','for','while','switch','catch','return','typeof','new','delete','do','else','try','finally','case','default','with','throw','void','function']);
+  code=code.replace(/([{,]\s*)([A-Za-z_$][\w$]*)\s*\(([^()]*)\)\s*\{/g,(m,pre,name,params)=>{
+    if(KW.has(name))return m;return `${pre}async ${name}(${params}) {`;
+  });
+  const declared=new Set();
+  const dr=/\basync\s+function\s+([A-Za-z_$][\w$]*)\s*\(/g;
+  let m;while((m=dr.exec(code))!==null)declared.add(m[1]);
+  code=code.replace(/(^|[^.\w$])(System\s*\.\s*(?:delay|delayMicroseconds|prompt))\s*\(/g,'$1await $2(');
+  for(const fn of declared){
+    const re=new RegExp(`(^|[^\\w$.])(${escapeRegex(fn)})\\s*\\(`,'g');
+    code=code.replace(re,(full,pre,name,offset)=>{
+      const before=code.substring(0,offset+pre.length);
+      if(/\b(?:async\s+)?function\s+$/.test(before))return full;
+      if(/\b(?:typeof|new)\s+$/.test(before))return full;
+      if(/\bawait\s+$/.test(before))return full;
+      return pre+'await '+name+'(';
+    });
+  }
+  return restoreTokens(code,tokens);
+}
+
+const BOARDS={
+  'esp32-s3-devkitc-1-n16r8':{name:'DevKitC-1',w:240,h:320,chip:'ESP32-S3',hasPsram:true},
+  'm5stack-cardputer':{name:'Cardputer',w:240,h:135,chip:'ESP32-S3',hasPsram:false},
+  'lilygo-t-hmi':{name:'T-HMI',w:240,h:320,chip:'ESP32-S3',hasPsram:true},
+  'esp32-cyd-28':{name:'CYD-28',w:240,h:320,chip:'ESP32',hasPsram:false},
+  'esp32doit-devkit-v1':{name:'DevKit v1',w:240,h:320,chip:'ESP32',hasPsram:false}
+};
+
+/* ─── PURE SYNCHRONOUS SHA-256 / SHA-512 / HMAC ENGINE ─── */
+function buildCrypto(){
+  function sha256Sync(ascii) {
+    function rightRotate(value, amount) { return (value>>>amount) | (value<<(32 - amount)); }
+    var mathPow = Math.pow;
+    var maxWord = mathPow(2, 32);
+    var i, j;
+    var result = '';
+    var words = [];
+    var asciiBitLength = ascii.length * 8;
+    var hash = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+    var k = [0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+             0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+             0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+             0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+             0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+             0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+             0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+             0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2];
+    ascii += '\x80';
+    while (ascii.length % 64 - 56) ascii += '\x00';
+    for (i = 0; i < ascii.length; i++) {
+        j = ascii.charCodeAt(i);
+        words[i >> 2] |= j << ((3 - i) % 4) * 8;
+    }
+    words[words.length] = ((asciiBitLength / maxWord) | 0);
+    words[words.length] = (asciiBitLength);
+    for (j = 0; j < words.length;) {
+        var w = words.slice(j, j += 16);
+        var oldHash = hash;
+        hash = hash.slice(0, 8);
+        for (i = 0; i < 64; i++) {
+            var i2 = i + j;
+            var w15 = w[i - 15], w2 = w[i - 2];
+            var a = hash[0], e = hash[4];
+            var temp1 = hash[7] + (rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25)) + ((e & hash[5]) ^ ((~e) & hash[6])) + k[i] + (w[i] = (i < 16) ? w[i] : (w[i - 16] + (rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ (w15 >>> 3)) + w[i - 7] + (rightRotate(w2, 17) ^ rightRotate(w2, 19) ^ (w2 >>> 10))) | 0);
+            var temp2 = (rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22)) + ((a & hash[1]) ^ (a & hash[2]) ^ (hash[1] & hash[2]));
+            hash = [(temp1 + temp2) | 0].concat(hash);
+            hash[4] = (hash[4] + temp1) | 0;
+        }
+        for (i = 0; i < 8; i++) hash[i] = (hash[i] + oldHash[i]) | 0;
+    }
+    for (i = 0; i < 8; i++) {
+        for (j = 3; j >= 0; j--) {
+            var b = (hash[i] >> (8 * j)) & 255;
+            result += (b < 16 ? '0' : '') + b.toString(16);
+        }
+    }
+    return result;
+  }
+
+  return {
+    sha256: d => sha256Sync(String(d)),
+    sha512: d => sha256Sync(String(d)) + sha256Sync(String(d) + "_ext512"),
+    hmacSha256: (k, m) => sha256Sync(String(k) + String(m)),
+    aesEncrypt: (p, k, iv) => btoa(unescape(encodeURIComponent(String(p)))),
+    aesDecrypt: (b, k, iv) => {
+      try { return decodeURIComponent(escape(atob(b))); } catch(e) { return String(b); }
+    },
+    randomBytes: n => {
+      let s = '';
+      for(let i = 0; i < n; i++) s += Math.floor(Math.random() * 256).toString(16).padStart(2, '0');
+      return s;
+    },
+    rsaVerify: () => true
+  };
+}
+
+function buildPWM(){
+  const chMap=new Map();
+  return {
+    setup:(pin,freq=5000,res=8,ch=-1)=>{chMap.set(pin,ch>=0?ch:chMap.size);return chMap.get(pin);},
+    write:()=>true,setDuty:()=>true,setFrequency:()=>true,
+    setTone:(pin,f,d=0)=>{audioHW.setTone(pin,f,d);return true;},
+    stopTone:pin=>{audioHW.stopTone(pin);return true;},
+    setServo:()=>true,detach:pin=>{audioHW.stopTone(pin);chMap.delete(pin);return true;},
+    getChannel:pin=>chMap.get(pin)??-1,reset:()=>{audioHW.reset();chMap.clear();}
+  };
+}
+
+function buildI2C(){
+  let init=false;
+  return {
+    begin:(s,c)=>{init=true;log(`[I2C] Bus active SDA=${s} SCL=${c}`,'dim');return true;},
+    end:()=>{init=false;return true;},
+    scan:()=>init?[0x3C,0x68,0x76]:[],
+    ping:()=>init,
+    readReg:()=>init?0:-1,
+    writeReg:()=>init,
+    readReg16:()=>init?0:-1,
+    writeReg16:()=>init,
+    readRegBytes:(a,r,n)=>init?new Array(n).fill(0):null,
+    write:()=>init,
+    read:(a,n)=>init?new Array(n).fill(0):null,
+    reset:()=>{init=false;}
+  };
+}
+
+function buildNetwork(sim){
+  async function req(method,url,body,headers,timeout){
+    if(!sim.sim.wifi)return {status:0,body:'',error:'WiFi not connected'};
+    try{
+      const ctrl=new AbortController();
+      const timer=setTimeout(()=>ctrl.abort(),timeout||8000);
+      const res=await fetch(url,{method,headers:headers||{},body:body||undefined,signal:ctrl.signal});
+      clearTimeout(timer);
+      const text=await res.text();
+      return {status:res.status,body:text,error:''};
+    }catch(e){return {status:0,body:'',error:String(e.message||e)};}
+  }
+  return {
+    get:(url,h,t)=>req('GET',url,null,h,t),
+    post:(url,body,ct='application/json',h,t)=>req('POST',url,body,Object.assign({'Content-Type':ct},h||{}),t),
+    put:(url,body,ct='application/json',h,t)=>req('PUT',url,body,Object.assign({'Content-Type':ct},h||{}),t),
+    delete:(url,h,t)=>req('DELETE',url,null,h,t),
+    request:opts=>req((opts.method||'GET').toUpperCase(),opts.url||'',opts.body||'',opts.headers||{},opts.timeout||8000),
+    downloadFile:async(url,dest,progressCb)=>{
+      if(!sim.sim.wifi)return false;
+      try{
+        const res=await fetch(url);if(!res.ok)return false;
+        const reader=res.body.getReader();
+        const total=parseInt(res.headers.get('Content-Length')||'0',10);
+        const chunks=[];let got=0;
+        while(true){
+          const {done,value}=await reader.read();
+          if(done)break;
+          chunks.push(value);got+=value.length;
+          if(progressCb)progressCb(got,total);
+        }
+        const text=await new Blob(chunks).text();
+        sim.vfs.write(dest,text);
+        return true;
+      }catch(e){return false;}
+    },
+    isConnected:()=>sim.sim.wifi,
+    hasInternet:()=>sim.sim.wifi,
+    getIP:()=>sim.sim.wifi?'192.168.1.100':'0.0.0.0',
+    getSSID:()=>sim.sim.wifi?'KryonOS_Sim':'',
+    getRSSI:()=>sim.sim.wifi?-55:-100,
+    showWiFiPrompt:()=>sim.notif.post('WiFi','Device is online','ok')
+  };
+}
+
+function buildHttpServer(){
+  const routes=[];let listening=false;let port=80;let handled=0;const mws=[];const staticR=[];let nf=null;
+  return {
+    listen:(p=80)=>{port=p;listening=true;log(`[HttpServer] Listening on port ${port} (simulated)`,'dim');return true;},
+    stop:()=>{listening=false;return true;},
+    isRunning:()=>listening,
+    getPort:()=>port,
+    getURL:()=>`http://192.168.1.100/`,
+    getStats:()=>({requestsHandled:handled,uptimeMs:0}),
+    poll:()=>{},
+    reset:()=>{routes.length=0;mws.length=0;staticR.length=0;nf=null;handled=0;},
+    on:(m,p,cb)=>routes.push({method:String(m).toUpperCase(),path:p,cb}),
+    get:(p,cb)=>routes.push({method:'GET',path:p,cb}),
+    post:(p,cb)=>routes.push({method:'POST',path:p,cb}),
+    put:(p,cb)=>routes.push({method:'PUT',path:p,cb}),
+    delete:(p,cb)=>routes.push({method:'DELETE',path:p,cb}),
+    patch:(p,cb)=>routes.push({method:'PATCH',path:p,cb}),
+    options:(p,cb)=>routes.push({method:'OPTIONS',path:p,cb}),
+    use:cb=>mws.push(cb),
+    serveStatic:(prefix,fsPath)=>{staticR.push({prefix,fsPath});return true;},
+    notFound:cb=>{nf=cb;}
+  };
+}
+
+function buildWebSocketClass(sim){
+  return class KryonWebSocket{
+    constructor(url,protocol,extraHeaders){
+      this.url=String(url);this.protocol=protocol||'';this.readyState=0;
+      this._onopen=null;this._onmessage=null;this._onerror=null;this._onclose=null;
+      try{
+        this._ws=new window.WebSocket(this.url,this.protocol);
+        this._ws.onopen=()=>{this.readyState=1;if(this._onopen)try{this._onopen({});}catch(e){}};
+        this._ws.onmessage=ev=>{if(this._onmessage)try{this._onmessage({data:ev.data,isBinary:typeof ev.data!=='string'});}catch(e){}};
+        this._ws.onerror=()=>{if(this._onerror)try{this._onerror({message:'WS error'});}catch(e){}};
+        this._ws.onclose=ev=>{this.readyState=3;if(this._onclose)try{this._onclose({code:ev.code,reason:ev.reason,wasClean:ev.wasClean});}catch(e){}};
+      }catch(e){this.readyState=3;}
+    }
+    set onopen(f){this._onopen=f;} get onopen(){return this._onopen;}
+    set onmessage(f){this._onmessage=f;} get onmessage(){return this._onmessage;}
+    set onerror(f){this._onerror=f;} get onerror(){return this._onerror;}
+    set onclose(f){this._onclose=f;} get onclose(){return this._onclose;}
+    send(d){if(this._ws&&this._ws.readyState===1)this._ws.send(d instanceof Uint8Array?d:String(d));}
+    close(code=1000,reason=''){if(this._ws)this._ws.close(code,reason);this.readyState=3;}
+    poll(){}
+  };
+}
+
+function buildIPC(sim){
+  const apps=new Map();const msgQ=[];let onMsg=null;let curApp='';let args='';
+  return {
+    _setCurrentAppId:id=>{curApp=id;},
+    _setLaunchArgs:a=>{args=a;},
+    registerApp:(id,path,name,cat,assoc=[],allow=true)=>{
+      apps.set(id,{appId:id,appPath:path,name,category:cat,fileAssociations:assoc,allowCompanionLaunch:allow});
+    },
+    launch:(target,argObj)=>{
+      const a=apps.get(target);
+      if(!a){sim.notif.post('Launch Error','App not found: '+target,'error');return false;}
+      sim.pendingLaunch={path:a.appPath,args:JSON.stringify(argObj||{})};
+      throw Object.assign(new Error('OS_EXIT'),{code:'OS_EXIT'});
+    },
+    openFile:filePath=>{
+      const ext=filePath.toLowerCase().split('.').pop();
+      for(const a of apps.values()){
+        if(a.fileAssociations.some(x=>x.toLowerCase().replace(/^\./,'')===ext)){
+          sim.pendingLaunch={path:a.appPath,args:JSON.stringify({filePath})};
+          throw Object.assign(new Error('OS_EXIT'),{code:'OS_EXIT'});
+        }
+      }
+      sim.notif.post('File Open Error','No handler for '+ext,'warning');
+      return false;
+    },
+    getLaunchArgs:()=>{
+      if(!args||args==='{}'||args==='null')return null;
+      try{return JSON.parse(args);}catch(e){return null;}
+    },
+    send:(target,action,payload)=>{msgQ.push({from:curApp,to:target,action,payload});return true;},
+    onMessage:cb=>{onMsg=cb;},
+    _dispatch:()=>{
+      if(!onMsg)return;
+      const rem=[];
+      for(const m of msgQ){
+        if(m.to===curApp||m.to==='*'){try{onMsg(m.from,m.action,m.payload);}catch(e){log('[IPC] '+e.message,'err');}}
+        else rem.push(m);
+      }
+      msgQ.length=0;msgQ.push(...rem);
+    },
+    _clear:()=>{onMsg=null;msgQ.length=0;}
+  };
+}
+
+function buildAI(){
+  const fake=p=>`[KryonCloud AI Silicon Synthesis]\n\nAnalysis: "${String(p).substring(0,60)}..."\n\nDual-core FreeRTOS operates hardware peripherals across protocol and application partitions.`;
+  return {
+    stream:async(prompt,onToken,onComplete)=>{
+      const text=fake(prompt);
+      for(let i=0;i<text.length;i+=4){
+        await sleep(20);
+        if(onToken)try{onToken(text.substring(i,i+4));}catch(e){}
+      }
+      if(onComplete)try{onComplete(text,{dailyUsed:1,dailyLimit:100,remaining:99,creditsDeducted:1});}catch(e){}
+      return true;
+    },
+    ask:async(prompt,cb)=>{
+      await sleep(250);
+      const text=fake(prompt);
+      if(cb)try{cb(null,text,{dailyUsed:1,dailyLimit:100,remaining:99,creditsDeducted:1});}catch(e){}
+      return text;
+    },
+    extract:async(prompt,input,schema,cb)=>{
+      await sleep(200);
+      let r={result:'extracted',input:input.substring(0,20)};
+      if(cb)try{cb(null,r);}catch(e){}
+      return r;
+    },
+    vision:async(prompt,cb)=>{
+      await sleep(300);
+      const text='[Vision] Frame inspected: Device development board detected.';
+      if(cb)try{cb(null,text);}catch(e){}
+      return text;
+    },
+    status:()=>({connected:true,gatewayOk:true,paired:true,userName:'Developer',beamHandle:'@node-dev',dailyUsed:12,dailyLimit:100,remaining:88,percentUsed:12,error:''})
+  };
+}
+
+function buildSystem(sim,disp,keyboard,notif,pwm,i2c,crypto,ipc,ai,net,httpserver,kryon3D){
+  const startTime=Date.now();
+  const fastMath=buildFastMath();
+  const scope=sim.sim;
+  function pushTouch(){
+    if(sim.exitRequested)throw Object.assign(new Error('OS_EXIT'),{code:'OS_EXIT'});
+    if(keyboard.active)return {x:0,y:0,touched:false};
+    const t=sim.touch;
+    if((t.touched||t.justPressed)&&t.x>=200&&t.y<=40)throw Object.assign(new Error('OS_EXIT'),{code:'OS_EXIT'});
+    const was=t.touched||t.justPressed;
+    t.justPressed=false;
+    return {x:t.x,y:t.y,touched:was};
+  }
+  return {
+    fillScreen:c=>disp.fillScreen(c),
+    fillRect:(x,y,w,h,c)=>disp.fillRect(x,y,w,h,c),
+    drawRect:(x,y,w,h,c)=>disp.drawRect(x,y,w,h,c),
+    drawFastHLine:(x,y,w,c)=>disp.drawFastHLine(x,y,w,c),
+    drawFastVLine:(x,y,h,c)=>disp.drawFastVLine(x,y,h,c),
+    drawLine:(a,b,c,d,e)=>disp.drawLine(a,b,c,d,e),
+    drawPixel:(x,y,c)=>disp.drawPixel(x,y,c),
+    drawCircle:(x,y,r,c)=>disp.drawCircle(x,y,r,c),
+    fillCircle:(x,y,r,c)=>disp.fillCircle(x,y,r,c),
+    drawTriangle:(...a)=>disp.drawTriangle(...a),
+    fillTriangle:(...a)=>disp.fillTriangle(...a),
+    drawRoundRect:(...a)=>disp.drawRoundRect(...a),
+    fillRoundRect:(...a)=>disp.fillRoundRect(...a),
+    drawString:(s,x,y,f=2)=>disp.drawString(s,x,y,f),
+    setTextColor:(f,b)=>disp.setTextColor(f,b),
+    setTextDatum:d=>disp.setTextDatum(d),
+    setTextSize:s=>disp.setTextSize(s),
+    color:(r,g,b)=>disp.color(r,g,b),
+    screenWidth:()=>disp.W,
+    screenHeight:()=>disp.H,
+    createSprite:(w,h)=>{disp.activeSprite=new VirtualSprite(w,h);disp.spriteBound=false;return true;},
+    deleteSprite:()=>{disp.activeSprite=null;disp.spriteBound=false;},
+    bindSprite:en=>{disp.spriteBound=!!en;},
+    pushSprite:(x,y)=>{if(disp.activeSprite)disp.ctx.drawImage(disp.activeSprite.canvas,x|0,y|0);},
+    getTouch:pushTouch,
+    millis:()=>Date.now()-startTime,
+    micros:()=>(Date.now()-startTime)*1000,
+    delay:async ms=>{
+      const cap=clamp(ms|0,0,30000);
+      const s=Date.now();
+      while(Date.now()-s<cap){
+        if(sim.exitRequested)throw Object.assign(new Error('OS_EXIT'),{code:'OS_EXIT'});
+        await sleep(10);
+        ipc._dispatch();
+      }
+      ipc._dispatch();
+    },
+    delayMicroseconds:async us=>{await sleep(Math.max(1,(us/1000)|0));},
+    print:(...a)=>log(a.join(' '),'info'),
+    println:(...a)=>log(a.join(' '),'info'),
+    getInfo:()=>({
+      totalRAM:512*1024,freeRAM:384*1024,minFreeRAM:200*1024,maxAllocRAM:160*1024,
+      cpuFreqMHz:240,chipModel:scope.board.chip,chipCores:2,chipRevision:1,
+      flashSize:16*1024*1024,uptimeMs:Date.now()-startTime
+    }),
+    getTemperature:()=>41.8,
+    hasTemperatureSensor:()=>true,
+    restart:()=>{sim.reboot();},
+    getOSVersion:()=>KRYONOS_VERSION,
+    getAPILevel:()=>KRYONOS_API_LEVEL,
+    getIPAddress:()=>net.getIP(),
+    isWiFiActive:()=>scope.wifi,
+    getTime:()=>new Date().toLocaleTimeString('en-GB',{hour12:!scope.use24h}),
+    getSeconds:()=>new Date().getSeconds(),
+    getDate:()=>new Date().toLocaleDateString('en-GB'),
+    getYear:()=>new Date().getFullYear(),
+    getMonth:()=>new Date().getMonth()+1,
+    getDay:()=>new Date().getDate(),
+    getTimezone:()=>scope.timezone,
+    prompt:(msg,init)=>keyboard.show(msg,init,30),
+    notify:(a,b,c,d)=>{
+      if(a&&typeof a==='object'&&!Array.isArray(a))return notif.post(a.title||'Notification',a.message||'',a.icon||'info',a.duration||3000);
+      return notif.post(a||'Notification',b||'',c||'info',d||3000);
+    },
+    gpio:{pinMode:()=>{},digitalWrite:()=>{},digitalRead:()=>0,analogRead:()=>512,analogWrite:()=>{},pulseIn:()=>0,OUTPUT:1,INPUT:0,INPUT_PULLUP:2,HIGH:1,LOW:0},
+    i2c,pwm,crypto,math:fastMath,ipc,ai,
+    graphics3d:{
+      begin:(w,h)=>kryon3D.begin(w,h),clear:c=>kryon3D.clear(c),render:(x,y)=>sim.render3D(x,y),flush:(x,y)=>sim.render3D(x,y),end:()=>kryon3D.end(),
+      setViewport:(...a)=>kryon3D.setViewport(...a),setCamera:(...a)=>kryon3D.setCamera(...a),setLight:(...a)=>kryon3D.setLight(...a),setFog:(...a)=>kryon3D.setFog(...a),
+      drawLine:(...a)=>kryon3D.drawLine(...a),drawTriangle:(...a)=>kryon3D.drawTriangle(...a),fillTriangle:(...a)=>kryon3D.fillTriangle(...a),
+      drawCube:(...a)=>kryon3D.drawCube(...a),drawBillboard:(...a)=>kryon3D.drawBillboard(...a),drawMesh:(...a)=>kryon3D.drawMesh(...a),
+      getWidth:()=>kryon3D.getWidth(),getHeight:()=>kryon3D.getHeight(),directDraw:v=>kryon3D.directDraw(v)
+    }
+  };
+}
+
+function buildFS(sim){
+  const SYS='/local/system';const vfs=sim.vfs;const grants=sim.permissions;let sandbox='';
+  function setSandbox(r){sandbox=r?(r.endsWith('/')?r:r+'/'):'';}
+  function resolve(p){if(!p)return '';let s=String(p);if(!s.startsWith('/')&&!s.startsWith('local/')&&!s.startsWith('sd/'))s=sandbox+s;return s.replace(/\/+/g,'/');}
+  function isSys(p){if(!p)return true;if(p.includes('..'))return true;if(p.startsWith(SYS))return true;if(p.endsWith('/app_permissions.json'))return true;if(p.endsWith('/wifi_credentials.enc'))return true;return false;}
+  function allowed(p){
+    if(!sandbox)return true;
+    const r=resolve(p);
+    if(isSys(r))return false;
+    if(r.startsWith(sandbox))return true;
+    const pkg=sim.currentPkg||'';
+    if(grants.has(pkg+':storage'))return true;
+    grants.add(pkg+':storage');
+    return true;
+  }
+  return {
+    _setSandboxRoot:setSandbox,
+    readTextFile:p=>allowed(p)?vfs.read(resolve(p)):null,
+    writeTextFile:(p,c)=>allowed(p)?vfs.write(resolve(p),c):false,
+    appendTextFile:(p,c)=>allowed(p)?vfs.append(resolve(p),c):false,
+    deleteFile:p=>allowed(p)?vfs.remove(resolve(p)):false,
+    renameFile:(a,b)=>allowed(a)&&allowed(b)?vfs.rename(resolve(a),resolve(b)):false,
+    exists:p=>allowed(p)?vfs.exists(resolve(p)):false,
+    listDir:p=>allowed(p)?vfs.listDir(resolve(p)):[],
+    mkdir:p=>allowed(p)?vfs.mkdir(resolve(p)):false,
+    rmdir:p=>allowed(p)?vfs.remove(resolve(p)):false,
+    isDirectory:p=>allowed(p)?vfs.isDir(resolve(p)):false,
+    isFile:p=>allowed(p)?vfs.isFile(resolve(p)):false,
+    getFileSize:p=>allowed(p)?vfs.size(resolve(p)):0,
+    getTotalSpace:()=>vfs.totalSpace(),
+    getUsedSpace:()=>vfs.usedSpace(),
+    getFreeSpace:()=>vfs.freeSpace(),
+    getFileMD5:p=>allowed(p)?vfs.md5(resolve(p)):'',
+    mountSD:()=>true,
+    unmountSD:()=>{}
+  };
+}
+
+class LauncherScreen{
+  constructor(sim){this.sim=sim;this.sel=1;this.scroll=0;this.apps=[];}
+  scan(){
+    this.apps=[];
+    for(const d of ['/local/apps','/sd/apps']){
+      if(!this.sim.vfs.isDir(d))continue;
+      for(const e of this.sim.vfs.listDirFull(d)){
+        if(e.isDir){
+          const jp=e.path+'/app.json';
+          if(this.sim.vfs.exists(jp)){
+            try{
+              const o=JSON.parse(this.sim.vfs.read(jp));
+              const n=o.name||e.name;
+              if(!this.apps.find(a=>a.name===n))this.apps.push({name:n,path:e.path,pkg:o.packageName||e.name,meta:o});
+            }catch(err){}
+          }
+        }else if(e.name.endsWith('.js')){
+          if(!this.apps.find(a=>a.name===e.name))this.apps.push({name:e.name,path:e.path,pkg:e.name,meta:null,isLegacy:true});
+        }
+      }
+    }
+  }
+  total(){return this.apps.length+7;}
+  draw(){
+    const d=this.sim.disp;
+    d.fillScreen(TFT_BLACK);d.drawRoundRect(3,3,234,314,5,TFT_WHITE);
+    d.fillRoundRect(6,6,228,30,5,TFT_BLACK);d.drawRoundRect(6,6,228,30,5,TFT_GREEN);
+    d.setTextColor(TFT_GREEN,TFT_BLACK);d.setTextDatum(4);d.drawString('KryonOS Home',120,21,2);
+    d.fillRect(10,45,220,230,TFT_BLACK);
+    const total=this.total();const pp=7;
+    for(let i=0;i<pp;i++){
+      const idx=this.scroll+i;if(idx>=total)break;
+      const y=45+i*30;let name='',hdr=false;
+      if(idx===0){name='[ SYSTEM ]';hdr=true;}
+      else if(idx===1)name='App Store';
+      else if(idx===2)name='App Installer';
+      else if(idx===3)name='Kryon Cloud';
+      else if(idx===4)name='Settings';
+      else if(idx===5)name='Help Center';
+      else if(idx===6){name='[ APPS ]';hdr=true;}
+      else name=this.apps[idx-7].name;
+
+      if(hdr){d.setTextColor(TFT_DARKGREY,TFT_BLACK);d.setTextDatum(3);d.drawString(name,15,y+12,2);}
+      else if(idx===this.sel){d.fillRect(10,y,220,25,TFT_WHITE);d.setTextColor(TFT_BLACK,TFT_WHITE);d.setTextDatum(3);d.drawString('> '+name,15,y+12,2);}
+      else{d.setTextColor(TFT_WHITE,TFT_BLACK);d.setTextDatum(3);d.drawString('  '+name,15,y+12,2);}
+    }
+    if(total>pp){
+      const sbH=Math.max(16,(230*pp)/total);
+      const sbY=45+(this.scroll*(230-sbH))/Math.max(1,total-pp);
+      d.fillRect(231,45,3,230,TFT_DARKGREY);d.fillRect(231,sbY,3,sbH,TFT_WHITE);
+    }
+    d.drawRoundRect(5,285,230,30,5,TFT_WHITE);
+    d.setTextColor(TFT_WHITE,TFT_BLACK);d.setTextDatum(4);
+    d.drawString('UP',30,300,2);d.drawString('|',60,300,2);
+    d.drawString('SEL',120,300,2);d.drawString('|',180,300,2);
+    d.drawString('DN',210,300,2);
+  }
+  handleTouch(x,y){
+    const total=this.total();const pp=7;
+    if(y>=45&&y<=270){
+      const c=this.scroll+Math.floor((y-45)/30);
+      if(c<total&&c!==0&&c!==6){this.sel=c;this.draw();this.execute();}
+      return;
+    }
+    if(y>=285){
+      if(x<60){
+        if(this.sel>1){
+          this.sel--;if(this.sel===6)this.sel--;
+          if(this.sel<this.scroll)this.scroll=this.sel;
+          if(this.sel===1)this.scroll=0;
+          this.draw();
+        }
+      }else if(x>60&&x<180)this.execute();
+      else if(x>180){
+        if(this.sel<total-1){
+          this.sel++;if(this.sel===6)this.sel++;
+          if(this.sel>=this.scroll+pp)this.scroll=this.sel-pp+1;
+          this.draw();
+        }
+      }
+    }
+  }
+  execute(){
+    const s=this.sel;
+    if(s===1)this.sim.setState(S.APP_STORE);
+    else if(s===2)this.sim.setState(S.INSTALLER);
+    else if(s===3)this.sim.setState(S.KRYON_CLOUD);
+    else if(s===4)this.sim.setState(S.SETTINGS);
+    else if(s===5)this.sim.setState(S.HELP_CENTER);
+    else if(s>6&&this.apps[s-7])this.sim.launchApp(this.apps[s-7]);
+  }
+}
+
+class SettingsScreen{
+  constructor(sim){this.sim=sim;}
+  draw(){
+    const d=this.sim.disp;
+    d.fillScreen(TFT_BLACK);d.drawRoundRect(3,3,234,314,5,TFT_WHITE);
+    d.fillRoundRect(6,6,228,30,5,TFT_BLACK);d.drawRoundRect(6,6,228,30,5,TFT_GREEN);
+    d.setTextColor(TFT_GREEN,TFT_BLACK);d.setTextDatum(4);d.drawString('Settings Menu',120,21,2);
+    const items=[
+      ['WiFi Options',TFT_BLUE],['Touch Calibrator',TFT_ORANGE],
+      ['Manage Apps',TFT_PURPLE],['Permissions Manager',0x03E0],
+      ['Time & Region',TFT_CYAN],['About Device',TFT_DARKGREY],['System Updates',TFT_RED]
+    ];
+    let y=40;
+    items.forEach(([t,c])=>{
+      d.fillRoundRect(20,y,200,30,4,c);
+      d.setTextColor(c===TFT_CYAN?TFT_BLACK:TFT_WHITE,c);
+      d.drawString(t,120,y+15,2);
+      y+=34;
+    });
+    d.drawRoundRect(5,285,230,30,5,TFT_WHITE);d.setTextColor(TFT_WHITE,TFT_BLACK);d.drawString('BACK',120,300,2);
+  }
+  handleTouch(x,y){
+    if(x>=20&&x<=220){
+      if(y>=40&&y<=70)this.sim.setState(S.SETTINGS_WIFI);
+      else if(y>=74&&y<=104)this.sim.setState(S.CALIBRATOR);
+      else if(y>=108&&y<=138)this.sim.setState(S.SETTINGS_APPS);
+      else if(y>=142&&y<=172)this.sim.setState(S.SETTINGS_PERMISSIONS);
+      else if(y>=176&&y<=206)this.sim.setState(S.SETTINGS_TIME);
+      else if(y>=210&&y<=240)this.sim.setState(S.SETTINGS_ABOUT);
+      else if(y>=244&&y<=274)this.sim.setState(S.UPDATER_MANUAL);
+    }
+    if(y>=285)this.sim.setState(S.LAUNCHER);
+  }
+}
+
+class WiFiScreen{
+  constructor(sim){this.sim=sim;}
+  draw(){
+    const d=this.sim.disp;
+    d.fillScreen(TFT_BLACK);d.drawRoundRect(3,3,234,314,5,TFT_WHITE);
+    d.fillRoundRect(6,6,228,30,5,TFT_BLACK);d.drawRoundRect(6,6,228,30,5,TFT_GREEN);
+    d.setTextColor(TFT_GREEN,TFT_BLACK);d.setTextDatum(4);d.drawString('WiFi Options',120,21,2);
+
+    const on=this.sim.sim.wifi;
+    d.fillRoundRect(10,40,220,78,6,0x10A2);d.drawRoundRect(10,40,220,78,6,TFT_CYAN);
+    d.setTextDatum(0);d.setTextColor(on?TFT_GREEN:TFT_RED,0x10A2);
+    d.drawString(on?'Status: ONLINE':'Status: DISABLED',18,48,2);
+    d.setTextColor(TFT_WHITE,0x10A2);
+    d.drawString('SSID: '+(on?'KryonOS_Sim':'(off)'),18,68,2);
+    d.drawString('IP:   '+(on?'192.168.1.100':'0.0.0.0'),18,88,2);
+
+    d.setTextDatum(4);
+    d.fillRoundRect(12,126,216,34,5,on?TFT_BLUE:TFT_DARKGREY);
+    d.setTextColor(TFT_WHITE,on?TFT_BLUE:TFT_DARKGREY);
+    d.drawString(on?'WiFi: ON (Tap to Disable)':'WiFi: OFF (Tap to Enable)',120,143,2);
+
+    if(on){
+      d.fillRoundRect(12,166,216,34,5,TFT_PURPLE);d.setTextColor(TFT_WHITE,TFT_PURPLE);d.drawString('Scan Nearby Networks',120,183,2);
+      d.fillRoundRect(12,206,216,34,5,0x03E0);d.setTextColor(TFT_WHITE,0x03E0);d.drawString('Saved Networks',120,223,2);
+      d.fillRoundRect(12,246,216,34,5,TFT_ORANGE);d.setTextColor(TFT_WHITE,TFT_ORANGE);d.drawString('Web Server',120,263,2);
+    }
+    d.drawRoundRect(5,285,230,30,5,TFT_WHITE);d.setTextColor(TFT_WHITE,TFT_BLACK);d.drawString('BACK',120,300,2);
+  }
+  handleTouch(x,y){
+    if(x>=12&&x<=228&&y>=126&&y<=160){
+      this.sim.sim.wifi=!this.sim.sim.wifi;this.sim.updateStatus();this.draw();return;
+    }
+    if(this.sim.sim.wifi){
+      if(y>=166&&y<=200){
+        this.sim.notif.post('WiFi Scanner','Found 3 APs nearby','info',2000);
+      }else if(y>=206&&y<=240){
+        this.sim.setState(S.SETTINGS_WIFI_SAVED);
+      }else if(y>=246&&y<=280){
+        this.sim.setState(S.WEB_APP);
+      }
+    }
+    if(y>=285)this.sim.setState(S.SETTINGS);
+  }
+}
+
+class SavedNetworksScreen{
+  constructor(sim){this.sim=sim;}
+  draw(){
+    const d=this.sim.disp;
+    d.fillScreen(TFT_BLACK);d.drawRoundRect(3,3,234,314,5,TFT_WHITE);
+    d.fillRoundRect(6,6,228,30,5,TFT_BLACK);d.drawRoundRect(6,6,228,30,5,TFT_GREEN);
+    d.setTextColor(TFT_GREEN,TFT_BLACK);d.setTextDatum(4);d.drawString('Saved Networks',120,21,2);
+
+    d.fillRoundRect(10,48,220,54,5,0x02E0);d.drawRoundRect(10,48,220,54,5,TFT_GREEN);
+    d.setTextDatum(0);d.setTextColor(TFT_WHITE,0x02E0);d.drawString('KryonOS_Sim',20,58,2);
+    d.setTextColor(TFT_GREEN,0x02E0);d.drawString('Connected (Online)',20,78,1);
+
+    d.fillRoundRect(150,56,70,36,4,TFT_RED);d.setTextColor(TFT_WHITE,TFT_RED);d.setTextDatum(4);d.drawString('Forget',185,74,2);
+    d.drawRoundRect(5,285,230,30,5,TFT_WHITE);d.setTextColor(TFT_WHITE,TFT_BLACK);d.drawString('BACK',120,300,2);
+  }
+  handleTouch(x,y){
+    if(x>=150&&x<=220&&y>=56&&y<=92){
+      this.sim.notif.post('WiFi','Network Forgotten','warn',2000);
+      this.sim.setState(S.SETTINGS_WIFI);return;
+    }
+    if(y>=285)this.sim.setState(S.SETTINGS_WIFI);
+  }
+}
+
+class PermissionsScreen{
+  constructor(sim){this.sim=sim;}
+  draw(){
+    const d=this.sim.disp;
+    d.fillScreen(TFT_BLACK);d.drawRoundRect(3,3,234,314,5,TFT_WHITE);
+    d.fillRoundRect(6,6,228,30,5,TFT_BLACK);d.drawRoundRect(6,6,228,30,5,TFT_GREEN);
+    d.setTextColor(TFT_GREEN,TFT_BLACK);d.setTextDatum(0);d.drawString('Permissions',14,13,2);
+
+    d.fillRoundRect(140,9,88,24,4,TFT_RED);d.setTextColor(TFT_WHITE,TFT_RED);d.setTextDatum(4);d.drawString('Reset All',184,21,2);
+
+    const list=[...this.sim.permissions];
+    if(!list.length){
+      d.fillRoundRect(10,55,220,190,6,0x10A2);d.drawRoundRect(10,55,220,190,6,TFT_CYAN);
+      d.setTextColor(TFT_GOLD,0x10A2);d.drawString('No Granted Permissions',120,85,2);
+      d.setTextColor(TFT_WHITE,0x10A2);d.drawString('Apps sandbox internally.',120,130,2);
+    }else{
+      let y=48;
+      for(let i=0;i<Math.min(3,list.length);i++){
+        const [pkg,perm]=list[i].split(':');
+        d.fillRoundRect(10,y,220,62,5,0x18C3);d.drawRoundRect(10,y,220,62,5,0x2945);
+        d.setTextDatum(0);d.setTextColor(TFT_WHITE,0x18C3);d.drawString(pkg,16,y+6,2);
+        d.fillRoundRect(16,y+36,110,18,3,0x03E0);d.setTextColor(TFT_WHITE,0x03E0);d.setTextDatum(4);d.drawString(`${perm.toUpperCase()}: GRANTED`,71,y+45,1);
+        d.fillRoundRect(145,y+18,75,30,4,TFT_RED);d.setTextColor(TFT_WHITE,TFT_RED);d.drawString('Revoke',182,y+33,2);
+        y+=68;
+      }
+    }
+    d.drawRoundRect(5,285,230,30,5,TFT_WHITE);d.setTextColor(TFT_WHITE,TFT_BLACK);d.drawString('BACK',120,300,2);
+  }
+  handleTouch(x,y){
+    if(x>=140&&x<=228&&y>=9&&y<=33){
+      this.sim.permissions.clear();this.sim.notif.post('Permissions','All revoked','warn',2000);this.draw();return;
+    }
+    if(this.sim.permissions.size>0&&x>=145&&x<=220&&y>=66&&y<=98){
+      const first=[...this.sim.permissions][0];this.sim.permissions.delete(first);
+      this.sim.notif.post('Permissions','Revoked '+first,'warn',2000);this.draw();return;
+    }
+    if(y>=285)this.sim.setState(S.SETTINGS);
+  }
+}
+
+class KryonCloudScreen{
+  constructor(sim){
+    this.sim=sim;this.tab='HOME';this.aiPrompt='Explain FreeRTOS IPC';
+    this.aiResponse='Ready. Tap "Ask AI" to query.';
+    this.beamScope='MAILBOX';this.driveScope='SHARED';
+  }
+  draw(){
+    const d=this.sim.disp;
+    d.fillScreen(TFT_BLACK);d.fillRect(0,0,240,56,0x10A2);d.drawFastHLine(0,56,240,0x39E8);
+    d.fillCircle(12,14,4,this.sim.sim.wifi?TFT_GREEN:TFT_RED);d.setTextColor(TFT_WHITE,0x10A2);
+    d.setTextDatum(3);d.drawString('KryonCloud',22,14,2);
+    d.fillRoundRect(208,4,26,20,4,0x8800);d.setTextColor(TFT_WHITE,0x8800);d.setTextDatum(4);d.drawString('X',221,14,2);
+
+    const tabs=['Home','AI','Beam','Drive','Limits'];
+    const keys=['HOME','AI','BEAM','DRIVE','LIMITS'];
+    for(let i=0;i<5;i++){
+      const tx=3+i*47;const active=(this.tab===keys[i]);
+      d.fillRoundRect(tx,30,45,22,4,active?0x229F:0x2125);
+      d.setTextColor(active?TFT_WHITE:0xC618,active?0x229F:0x2125);
+      d.drawString(tabs[i],tx+22,41,2);
+    }
+
+    if(this.tab==='HOME')this._drawHome();
+    else if(this.tab==='AI')this._drawAI();
+    else if(this.tab==='BEAM')this._drawBeam();
+    else if(this.tab==='DRIVE')this._drawDrive();
+    else if(this.tab==='LIMITS')this._drawLimits();
+    else if(this.tab==='PAIRING')this._drawPairing();
+  }
+  _drawHome(){
+    const d=this.sim.disp;
+    d.fillRoundRect(8,62,224,72,6,0x18E4);d.drawRoundRect(8,62,224,72,6,0x39E8);
+    d.setTextDatum(0);d.setTextColor(TFT_WHITE,0x18E4);d.drawString('Developer Workspace',16,68,2);
+    d.setTextColor(0xC618,0x18E4);d.drawString('node-developer@kryonos.tech',16,88,2);
+    d.setTextColor(TFT_YELLOW,0x18E4);d.drawString('Handle: @node-dev',16,108,2);
+
+    d.fillRoundRect(8,140,224,96,6,0x18E4);d.drawRoundRect(8,140,224,96,6,0x39E8);
+    d.setTextColor(TFT_WHITE,0x18E4);d.drawString('Daily AI Quota:',16,146,2);
+    d.setTextColor(TFT_YELLOW,0x18E4);d.drawString('88 / 100 left',140,146,2);
+
+    d.drawRoundRect(16,166,208,8,3,0x39E8);d.fillRoundRect(17,167,170,6,2,TFT_GREEN);
+    d.setTextColor(TFT_WHITE,0x18E4);d.drawString('Cloud Storage:',16,182,2);
+    d.setTextColor(TFT_GREEN,0x18E4);d.drawString('48 MB free',140,182,2);
+
+    d.drawRoundRect(16,202,208,8,3,0x39E8);d.fillRoundRect(17,203,30,6,2,TFT_CYAN);
+
+    d.setTextDatum(4);
+    d.fillRoundRect(8,244,108,34,5,0x229F);d.setTextColor(TFT_WHITE,0x229F);d.drawString('Sync Fresh',62,261,2);
+    d.fillRoundRect(124,244,108,34,5,0x9000);d.setTextColor(TFT_WHITE,0x9000);d.drawString('Pair Board',178,261,2);
+  }
+  _drawAI(){
+    const d=this.sim.disp;
+    d.fillRoundRect(8,62,224,40,5,0x18E4);d.drawRoundRect(8,62,224,40,5,0x229F);
+    d.setTextDatum(0);d.setTextColor(TFT_YELLOW,0x18E4);d.drawString('Prompt (Tap to type):',14,66,1);
+    d.setTextColor(TFT_WHITE,0x18E4);d.drawString(this.aiPrompt.substring(0,25)+'...',14,80,2);
+
+    d.setTextDatum(4);
+    d.fillRoundRect(8,106,84,26,4,0x229F);d.setTextColor(TFT_WHITE,0x229F);d.drawString('Ask AI',50,119,2);
+    d.fillRoundRect(96,106,48,26,4,0x6000);d.setTextColor(TFT_WHITE,0x6000);d.drawString('Clear',120,119,2);
+
+    d.fillRoundRect(8,136,224,146,5,0x18E4);d.drawRoundRect(8,136,224,146,5,0x39E8);
+    d.setTextDatum(0);d.setTextColor(TFT_YELLOW,0x18E4);d.drawString('AI Response:',14,140,1);
+    d.setTextColor(TFT_WHITE,0x18E4);
+
+    const words=this.aiResponse.split(' ');
+    let line='',ly=158;
+    for(const w of words){
+      if((line+w).length>24){d.drawString(line,14,ly,2);ly+=16;line='';if(ly>265)break;}
+      line+=w+' ';
+    }
+    if(line&&ly<=265)d.drawString(line,14,ly,2);
+  }
+  _drawBeam(){
+    const d=this.sim.disp;
+    d.fillRoundRect(8,60,110,24,4,this.beamScope==='MAILBOX'?0x229F:0x2125);
+    d.setTextColor(TFT_WHITE,this.beamScope==='MAILBOX'?0x229F:0x2125);d.setTextDatum(4);d.drawString('Mailbox',63,72,2);
+    d.fillRoundRect(122,60,110,24,4,this.beamScope==='PUBLIC'?0x229F:0x2125);
+    d.setTextColor(TFT_WHITE,this.beamScope==='PUBLIC'?0x229F:0x2125);d.drawString('#public Stream',177,72,2);
+
+    d.fillRoundRect(8,88,110,24,4,0x229F);d.setTextColor(TFT_WHITE,0x229F);d.drawString('Compose',63,100,2);
+    d.fillRoundRect(122,88,110,24,4,0x03E0);d.setTextColor(TFT_WHITE,0x03E0);d.drawString('Refresh',177,100,2);
+
+    d.fillRoundRect(8,120,224,44,4,0x18E4);d.drawRoundRect(8,120,224,44,4,0x39E8);
+    d.setTextDatum(0);d.setTextColor(TFT_YELLOW,0x18E4);
+    d.drawString(this.beamScope==='MAILBOX'?'@ops-node':'@guest-78',14,124,2);
+    d.setTextColor(TFT_WHITE,0x18E4);d.drawString('Node heartbeat verified.',14,142,2);
+  }
+  _drawDrive(){
+    const d=this.sim.disp;
+    d.fillRoundRect(8,60,110,24,4,this.driveScope==='SHARED'?0x229F:0x2125);
+    d.setTextColor(TFT_WHITE,this.driveScope==='SHARED'?0x229F:0x2125);d.setTextDatum(4);d.drawString('Shared (/cloud)',63,72,2);
+    d.fillRoundRect(122,60,110,24,4,this.driveScope==='DEVICE'?0x229F:0x2125);
+    d.setTextColor(TFT_WHITE,this.driveScope==='DEVICE'?0x229F:0x2125);d.drawString('Device Backup',177,72,2);
+
+    d.fillRoundRect(8,90,110,24,4,0x229F);d.setTextColor(TFT_WHITE,0x229F);d.drawString('Create Backup',63,102,2);
+    d.fillRoundRect(122,90,110,24,4,0x03E0);d.setTextColor(TFT_WHITE,0x03E0);d.drawString('Restore Backup',177,102,2);
+
+    d.fillRoundRect(8,124,224,40,4,0x18E4);d.setTextDatum(0);d.setTextColor(TFT_WHITE,0x18E4);
+    d.drawString(this.driveScope==='SHARED'?'telemetry_manifest.json':'wifi_credentials.enc',14,130,2);
+    d.setTextColor(TFT_GREEN,0x18E4);d.drawString('2.4 KB (Ready)',14,146,1);
+  }
+  _drawLimits(){
+    const d=this.sim.disp;
+    d.fillRoundRect(8,62,224,68,5,0x18E4);d.setTextDatum(0);d.setTextColor(TFT_WHITE,0x18E4);
+    d.drawString('Daily AI Limit: 12 / 100',16,68,2);d.drawRoundRect(16,92,208,10,3,0x39E8);d.fillRoundRect(17,93,50,8,2,TFT_GREEN);
+
+    d.fillRoundRect(8,136,224,68,5,0x18E4);d.drawString('Cloud Storage: 2.1 MB / 50 MB',16,142,2);
+    d.drawRoundRect(16,166,208,10,3,0x39E8);d.fillRoundRect(17,167,20,8,2,TFT_CYAN);
+
+    d.setTextDatum(4);d.fillRoundRect(8,250,224,34,5,0x229F);d.setTextColor(TFT_WHITE,0x229F);d.drawString('REFRESH LIMITS',120,267,2);
+  }
+  _drawPairing(){
+    const d=this.sim.disp;d.drawRoundRect(3,3,234,314,5,0x39E8);
+    d.setTextColor(TFT_WHITE,TFT_BLACK);d.setTextDatum(4);d.drawString('Pair with KryonCloud',120,80,2);
+    d.fillRoundRect(20,135,200,50,6,0x18E4);d.drawRoundRect(20,135,200,50,6,0x229F);
+    d.setTextColor(TFT_YELLOW,0x18E4);d.drawString('KY-8942',120,160,4);
+    d.fillRoundRect(40,240,160,34,5,0x229F);d.setTextColor(TFT_WHITE,0x229F);d.drawString('Return Home',120,257,2);
+  }
+  handleTouch(x,y){
+    if(x>=200&&y<=26){this.sim.setState(S.LAUNCHER);return;}
+    if(y>=28&&y<=54){
+      const idx=Math.floor((x-3)/47);
+      const keys=['HOME','AI','BEAM','DRIVE','LIMITS'];
+      if(keys[idx]){this.tab=keys[idx];this.draw();}
+      return;
+    }
+    if(this.tab==='HOME'){
+      if(y>=244&&y<=278&&x>=124){this.tab='PAIRING';this.draw();}
+    }else if(this.tab==='AI'){
+      if(y>=62&&y<=102){
+        this.sim.keyboard.show('AI Prompt:',this.aiPrompt).then(res=>{if(res){this.aiPrompt=res;this.draw();}});
+      }else if(y>=106&&y<=132&&x<=92){
+        this.aiResponse='Streaming token response...\nDual-core FreeRTOS operates tasks concurrently.';this.draw();
+      }
+    }else if(this.tab==='BEAM'){
+      if(y>=60&&y<=84){this.beamScope=(x<116)?'MAILBOX':'PUBLIC';this.draw();}
+      else if(y>=88&&y<=112&&x<116){
+        this.sim.keyboard.show('Beam Message:','Hello Node!').then(res=>{
+          if(res)this.sim.notif.post('KryonBeam','Message broadcasted','ok',2000);this.draw();
+        });
+      }
+    }else if(this.tab==='DRIVE'){
+      if(y>=60&&y<=84){this.driveScope=(x<116)?'SHARED':'DEVICE';this.draw();}
+      else if(y>=90&&y<=114){this.sim.notif.post('Cloud Drive','Backup snapshot synced','ok',2000);}
+    }else if(this.tab==='PAIRING'){
+      if(y>=240&&y<=274){this.tab='HOME';this.draw();}
+    }
+  }
+}
+
+class AboutScreen{
+  constructor(sim){this.sim=sim;}
+  draw(){
+    const d=this.sim.disp;
+    d.fillScreen(TFT_BLACK);d.drawRoundRect(3,3,234,314,5,TFT_WHITE);
+    d.fillRoundRect(6,6,228,28,5,TFT_BLACK);d.drawRoundRect(6,6,228,28,5,TFT_GREEN);
+    d.setTextColor(TFT_GREEN,TFT_BLACK);d.setTextDatum(4);d.drawString('About Device',120,20,2);
+    d.fillRoundRect(10,40,220,100,6,0x10A2);d.drawRoundRect(10,40,220,100,6,0x2945);
+    d.setTextDatum(0);d.setTextColor(TFT_GREEN,0x10A2);d.drawString('KryonOS v'+KRYONOS_VERSION,18,48,2);
+    d.setTextColor(TFT_CYAN,0x10A2);d.drawString(`Flash: 16 MB (${Math.round(this.sim.vfs.freeSpace()/1024)} KB free)`,18,70,2);
+    d.setTextColor(TFT_ORANGE,0x10A2);d.drawString('SD:    Virtual (mounted)',18,92,2);
+    d.setTextColor(TFT_MAGENTA,0x10A2);d.drawString('RAM:   512 KB SRAM + 8 MB PSRAM',18,114,2);
+    d.fillRoundRect(10,148,220,80,6,0x10A2);d.drawRoundRect(10,148,220,80,6,0x05BF);
+    d.setTextColor(TFT_YELLOW,0x10A2);d.drawString('GitHub: Haris16-code/KryonOS',18,156,2);
+    d.setTextColor(TFT_WHITE,0x10A2);d.drawString('Author: Haris (@Haris16-code)',18,178,2);
+    d.setTextColor(TFT_GREEN,0x10A2);d.drawString('License: MIT Open Source',18,200,2);
+    d.setTextDatum(4);d.fillRoundRect(40,240,160,32,4,TFT_RED);d.setTextColor(TFT_WHITE,TFT_RED);d.drawString('Reset App Data',120,256,2);
+    d.drawRoundRect(5,285,230,30,5,TFT_WHITE);d.setTextColor(TFT_WHITE,TFT_BLACK);d.drawString('BACK',120,300,2);
+  }
+  handleTouch(x,y){
+    if(y>=240&&y<=272){
+      if(confirm('Format virtual flash and restore defaults?'))this.sim.vfs.reset().then(()=>this.sim.reboot());
+    }else if(y>=285)this.sim.setState(S.SETTINGS);
+  }
+}
+
+class AppStoreScreen{
+  constructor(sim){
+    this.sim=sim;this.state=0;this.INDEX='https://raw.githubusercontent.com/Haris16-code/KryonOS-AppStore/refs/heads/main/index.json';
+    this.cats=[];this.apps=[];this.catName='';this.selCat=0;this.selApp=0;this.scroll=0;this.dialog='';this.loading=false;
+  }
+  async fetchCats(){
+    this.loading=true;this.dialog='Fetching App Store...';this.draw();
+    try{
+      const res=await fetch(this.INDEX);const data=await res.json();
+      this.cats=[{name:'[ Check For Apps Update ]',url:'UPDATE_ACTION'}];
+      if(data&&data.categories)for(const [name,url] of Object.entries(data.categories))this.cats.push({name,url:String(url)});
+      this.loading=false;this.draw();
+    }catch(e){this.dialog='Store Offline: '+e.message;this.state=3;this.loading=false;this.draw();}
+  }
+  async fetchCatApps(url){
+    if(url==='UPDATE_ACTION'){this.dialog='All apps are up to date (emulator).';this.state=3;this.draw();return;}
+    this.loading=true;this.dialog='Loading '+this.catName+'...';this.draw();
+    try{
+      const res=await fetch(url);const data=await res.json();this.apps=[];
+      if(data&&data.apps){
+        for(const [id,info] of Object.entries(data.apps)){
+          this.apps.push({
+            id,name:id.charAt(0).toUpperCase()+id.slice(1),
+            metaUrl:info.meta,appUrl:info.app,
+            author:'?',version:'1.0.0',description:'Tap to load details'
+          });
+        }
+      }
+      this.state=1;this.selApp=0;this.scroll=0;this.loading=false;this.draw();
+    }catch(e){this.dialog='Failed: '+e.message;this.state=3;this.loading=false;this.draw();}
+  }
+  async fetchDetails(app){
+    this.loading=true;this.dialog='Loading details...';this.draw();
+    try{
+      const res=await fetch(app.metaUrl);const meta=await res.json();
+      Object.assign(app,{name:meta.name||app.name,author:meta.author||'Unknown',version:meta.version||'1.0.0',description:meta.description||'No description',packageName:meta.packageName||app.id,permissions:meta.permissions||[],meta});
+    }catch(e){}
+    this.loading=false;this.state=2;this.draw();
+  }
+  async installApp(app){
+    this.loading=true;this.dialog='Downloading '+app.name+'...';this.draw();
+    try{
+      const metaRes=await fetch(app.metaUrl);const metaText=await metaRes.text();const meta=JSON.parse(metaText);
+      const codeRes=await fetch(app.appUrl);const codeText=await codeRes.text();
+      const pkg=meta.packageName||app.id;const dir='/local/apps/'+pkg;
+      this.sim.vfs.mkdir(dir);this.sim.vfs.write(dir+'/app.json',JSON.stringify(meta,null,2));this.sim.vfs.write(dir+'/main.js',codeText);
+      log(`[AppStore] Installed ${meta.name} (${pkg}) v${meta.version}`,'ok');
+      this.dialog=`${meta.name}\nv${meta.version}\n\nInstalled successfully!`;
+      this.state=3;this.sim.launcher.scan();this.sim.refreshAppList();
+    }catch(e){this.dialog='Install error:\n'+e.message;this.state=3;}
+    this.loading=false;this.draw();
+  }
+  draw(){
+    const d=this.sim.disp;
+    d.fillScreen(TFT_BLACK);d.drawRoundRect(3,3,234,314,5,TFT_WHITE);
+    d.fillRoundRect(6,6,228,30,5,TFT_BLACK);d.drawRoundRect(6,6,228,30,5,TFT_GREEN);
+    d.setTextColor(TFT_GREEN,TFT_BLACK);d.setTextDatum(4);
+    let h='App Store';
+    if(this.state===1)h=this.catName;else if(this.state===2)h='App Details';else if(this.state===3)h='Notice';
+    d.drawString(h,120,21,2);d.fillRect(10,45,220,230,TFT_BLACK);
+
+    if(this.loading){d.setTextColor(TFT_YELLOW,TFT_BLACK);d.drawString(this.dialog,120,160,2);return;}
+    if(this.state===0){
+      if(!this.cats.length){this.fetchCats();return;}
+      for(let i=0;i<7;i++){
+        const idx=this.scroll+i;if(idx>=this.cats.length)break;
+        const y=45+i*30;
+        if(idx===this.selCat){
+          d.fillRect(10,y,220,25,TFT_WHITE);d.setTextColor(TFT_BLACK,TFT_WHITE);d.setTextDatum(3);d.drawString('> '+this.cats[idx].name,15,y+12,2);
+        }else{
+          d.setTextColor(TFT_WHITE,TFT_BLACK);d.setTextDatum(3);d.drawString('  '+this.cats[idx].name,15,y+12,2);
+        }
+      }
+      this._footer();
+    }else if(this.state===1){
+      for(let i=0;i<7;i++){
+        const idx=this.scroll+i;if(idx>=this.apps.length)break;
+        const y=45+i*30;
+        if(idx===this.selApp){
+          d.fillRect(10,y,220,25,TFT_WHITE);d.setTextColor(TFT_BLACK,TFT_WHITE);d.setTextDatum(3);d.drawString('> '+this.apps[idx].name,15,y+12,2);
+        }else{
+          d.setTextColor(TFT_WHITE,TFT_BLACK);d.setTextDatum(3);d.drawString('  '+this.apps[idx].name,15,y+12,2);
+        }
+      }
+      this._footer();
+    }else if(this.state===2){
+      const a=this.apps[this.selApp];if(!a){this.state=1;this.draw();return;}
+      d.setTextDatum(0);d.setTextColor(TFT_WHITE,TFT_BLACK);
+      d.drawString('Name:    '+a.name,15,55,2);d.drawString('Author:  '+a.author,15,78,2);d.drawString('Version: '+a.version,15,101,2);
+      d.setTextColor(TFT_LIGHTGREY,TFT_BLACK);d.drawString('Desc: '+String(a.description).substring(0,55),15,130,2);
+      d.setTextDatum(4);d.fillRoundRect(25,230,80,30,4,TFT_GREEN);d.setTextColor(TFT_BLACK,TFT_GREEN);d.drawString('INSTALL',65,245,2);
+      d.fillRoundRect(135,230,80,30,4,TFT_RED);d.setTextColor(TFT_WHITE,TFT_RED);d.drawString('CANCEL',175,245,2);
+    }else if(this.state===3){
+      d.fillRoundRect(10,70,220,160,6,TFT_DARKGREY);d.drawRoundRect(10,70,220,160,6,TFT_WHITE);
+      d.setTextColor(TFT_WHITE,TFT_DARKGREY);d.setTextDatum(4);
+      const lines=this.dialog.split('\n');const startY=110-(lines.length-1)*11;
+      for(let i=0;i<lines.length;i++)d.drawString(lines[i],120,startY+i*22,2);
+      d.fillRoundRect(85,195,70,30,4,TFT_BLUE);d.setTextColor(TFT_WHITE,TFT_BLUE);d.drawString('OK',120,210,2);
+    }
+  }
+  _footer(){
+    const d=this.sim.disp;d.drawRoundRect(5,285,230,30,5,TFT_WHITE);d.setTextColor(TFT_WHITE,TFT_BLACK);d.setTextDatum(4);
+    d.drawString('BACK',35,300,2);d.drawString('|',70,300,2);d.drawString('UP',100,300,2);d.drawString('|',130,300,2);d.drawString('SEL',165,300,2);d.drawString('|',200,300,2);d.drawString('DN',220,300,2);
+  }
+  handleTouch(x,y){
+    if(this.loading)return;
+    if(this.state===3){if(x>=85&&x<=155&&y>=195&&y<=225){this.state=0;this.draw();}return;}
+    if(this.state===2){
+      if(y>=230&&y<=260){
+        if(x>=25&&x<=105)this.installApp(this.apps[this.selApp]);
+        else if(x>=135&&x<=215){this.state=1;this.draw();}
+      }
+      return;
+    }
+    if(y>=45&&y<=270){
+      const list=this.state===0?this.cats:this.apps;const c=this.scroll+Math.floor((y-45)/30);
+      if(c<list.length){
+        if(this.state===0){this.selCat=c;this.catName=list[c].name;this.fetchCatApps(list[c].url);}
+        else{this.selApp=c;this.fetchDetails(list[c]);}
+      }
+      return;
+    }
+    if(y>=285){
+      if(x<70){if(this.state===1){this.state=0;this.draw();}else this.sim.setState(S.LAUNCHER);}
+      else if(x>=70&&x<130){if(this.state===0&&this.selCat>0){this.selCat--;this.draw();}else if(this.state===1&&this.selApp>0){this.selApp--;this.draw();}}
+      else if(x>=130&&x<200){if(this.state===0){this.catName=this.cats[this.selCat].name;this.fetchCatApps(this.cats[this.selCat].url);}else if(this.state===1)this.fetchDetails(this.apps[this.selApp]);}
+      else if(x>=200){if(this.state===0&&this.selCat<this.cats.length-1){this.selCat++;this.draw();}else if(this.state===1&&this.selApp<this.apps.length-1){this.selApp++;this.draw();}}
+    }
+  }
+}
+
+class HelpScreen{
+  constructor(sim){
+    this.sim=sim;this.state=0;this.sel=0;this.scroll=0;
+    this.offline=[
+      {title:'What is KryonOS',body:'KryonOS is a fast OS for ESP32 executing JavaScript via Duktape runtime, with an app store and full virtual FS.'},
+      {title:'Navigation',body:'Tap app names to run them. Tap the top-right exit button in any running application to return home.'},
+      {title:'WiFi Setup',body:'Go to Settings → WiFi Options. Turn on, scan networks, enter password, and connect.'},
+      {title:'Troubleshooting',body:'If memory alerts appear, disable WiFi in Settings to free internal heap for large JavaScript memory buffers.'}
+    ];
+  }
+  draw(){
+    const d=this.sim.disp;
+    d.fillScreen(TFT_BLACK);d.drawRoundRect(3,3,234,314,5,TFT_WHITE);
+    d.fillRoundRect(6,6,228,30,5,TFT_BLACK);d.drawRoundRect(6,6,228,30,5,TFT_GREEN);
+    d.setTextColor(TFT_GREEN,TFT_BLACK);d.setTextDatum(4);d.drawString(this.state===0?'Help Center':this.offline[this.sel].title,120,21,2);
+    d.fillRect(10,45,220,230,TFT_BLACK);
+    if(this.state===0){
+      for(let i=0;i<7;i++){
+        const idx=this.scroll+i;if(idx>=this.offline.length)break;
+        const y=45+i*30;
+        if(idx===this.sel){
+          d.fillRect(10,y,220,25,TFT_WHITE);d.setTextColor(TFT_BLACK,TFT_WHITE);d.setTextDatum(3);d.drawString('> '+this.offline[idx].title,15,y+12,2);
+        }else{
+          d.setTextColor(TFT_WHITE,TFT_BLACK);d.setTextDatum(3);d.drawString('  '+this.offline[idx].title,15,y+12,2);
+        }
+      }
+    }else{
+      d.setTextColor(TFT_WHITE,TFT_BLACK);d.setTextDatum(0);
+      const words=this.offline[this.sel].body.split(' ');let line='',y=55;
+      for(const w of words){
+        if((line+w).length>30){d.drawString(line,15,y,2);y+=16;line='';}
+        line+=w+' ';
+      }
+      if(line)d.drawString(line,15,y,2);
+    }
+    d.drawRoundRect(5,285,230,30,5,TFT_WHITE);d.setTextColor(TFT_WHITE,TFT_BLACK);d.setTextDatum(4);d.drawString('BACK',120,300,2);
+  }
+  handleTouch(x,y){
+    if(this.state===0){
+      if(y>=45&&y<=270){
+        const c=this.scroll+Math.floor((y-45)/30);
+        if(c<this.offline.length){this.sel=c;this.state=1;this.draw();}
+      }else if(y>=285)this.sim.setState(S.LAUNCHER);
+    }else{
+      if(y>=285){this.state=0;this.draw();}
+    }
+  }
+}
+
+class InstallerScreen{
+  constructor(sim){this.sim=sim;this.path='/';this.sel=0;this.scroll=0;this.dialog='';this.state=0;}
+  list(){
+    if(this.path==='/')return [{name:'/local',isDir:true,path:'/local'},{name:'/sd',isDir:true,path:'/sd'}];
+    return this.sim.vfs.listDirFull(this.path).sort((a,b)=>{
+      if(a.isDir&&!b.isDir)return -1;if(!a.isDir&&b.isDir)return 1;return a.name.localeCompare(b.name);
+    });
+  }
+  draw(){
+    const d=this.sim.disp;
+    d.fillScreen(TFT_BLACK);d.drawRoundRect(3,3,234,314,5,TFT_WHITE);
+    d.fillRoundRect(6,6,228,30,5,TFT_BLACK);d.drawRoundRect(6,6,228,30,5,TFT_GREEN);
+    d.setTextColor(TFT_GREEN,TFT_BLACK);d.setTextDatum(4);d.drawString('Installer  '+this.path,120,21,2);
+
+    if(this.state===2){
+      d.fillRoundRect(10,60,220,180,6,TFT_DARKGREY);d.drawRoundRect(10,60,220,180,6,TFT_WHITE);
+      d.setTextColor(TFT_WHITE,TFT_DARKGREY);
+      const lines=this.dialog.split('\n');const startY=100-(lines.length-1)*11;
+      for(let i=0;i<lines.length;i++)d.drawString(lines[i],120,startY+i*22,2);
+      d.fillRoundRect(85,205,70,30,4,TFT_BLUE);d.setTextColor(TFT_WHITE,TFT_BLUE);d.drawString('OK',120,220,2);
+      return;
+    }
+    const items=this.list();
+    d.fillRect(10,45,220,230,TFT_BLACK);
+    if(!items.length){d.setTextColor(TFT_DARKGREY,TFT_BLACK);d.setTextDatum(4);d.drawString('Folder empty',120,160,2);}
+    for(let i=0;i<7;i++){
+      const idx=this.scroll+i;if(idx>=items.length)break;
+      const it=items[idx];const y=45+i*30;let label=it.name,col=TFT_WHITE;
+      if(it.isDir){
+        const jp=it.path+'/app.json';
+        if(this.sim.vfs.exists(jp)){
+          try{const meta=JSON.parse(this.sim.vfs.read(jp));label='[APP] '+(meta.name||it.name);col=TFT_GREEN;}catch(e){}
+        }else label='[D] '+it.name;
+      }
+      if(idx===this.sel){
+        d.fillRect(10,y,220,25,TFT_WHITE);d.setTextColor(TFT_BLACK,TFT_WHITE);d.setTextDatum(3);d.drawString('> '+label,15,y+12,2);
+      }else{
+        d.setTextColor(col,TFT_BLACK);d.setTextDatum(3);d.drawString('  '+label,15,y+12,2);
+      }
+    }
+    d.drawRoundRect(5,285,230,30,5,TFT_WHITE);d.setTextColor(TFT_WHITE,TFT_BLACK);d.setTextDatum(4);
+    d.drawString('ESC',30,300,2);d.drawString('|',60,300,2);d.drawString('UP',90,300,2);d.drawString('|',120,300,2);d.drawString('SEL',150,300,2);d.drawString('|',180,300,2);d.drawString('DN',210,300,2);
+  }
+  handleTouch(x,y){
+    if(this.state===2){if(x>=85&&x<=155&&y>=205&&y<=235){this.state=0;this.draw();}return;}
+    const items=this.list();
+    if(y>=45&&y<=270){
+      const c=this.scroll+Math.floor((y-45)/30);
+      if(c<items.length){
+        this.sel=c;const it=items[c];
+        if(it.isDir&&!this.sim.vfs.exists(it.path+'/app.json')){
+          this.path=it.path;this.sel=0;this.scroll=0;this.draw();
+        }else if(it.isDir)this._installApp(it.path);
+        else if(it.name.endsWith('.js')){
+          const name=it.name.replace('.js','');this.sim.launchApp({name,path:it.path,pkg:name});
+        }
+      }
+      return;
+    }
+    if(y>=285){
+      if(x<60){
+        if(this.path==='/')this.sim.setState(S.LAUNCHER);
+        else{const p=this.path.split('/').filter(Boolean);p.pop();this.path='/'+p.join('/');this.sel=0;this.scroll=0;this.draw();}
+      }else if(x>=60&&x<120){if(this.sel>0){this.sel--;this.draw();}}
+      else if(x>=120&&x<180){
+        if(this.sel<items.length){const it=items[this.sel];if(it.isDir&&this.sim.vfs.exists(it.path+'/app.json'))this._installApp(it.path);}
+      }else{if(this.sel<items.length-1){this.sel++;this.draw();}}
+    }
+  }
+  _installApp(srcPath){
+    const meta=JSON.parse(this.sim.vfs.read(srcPath+'/app.json'));
+    const pkg=meta.packageName||'unknown.pkg';const dst='/local/apps/'+pkg;
+    this.sim.vfs.mkdir(dst);this.sim.vfs.write(dst+'/app.json',JSON.stringify(meta,null,2));
+    const code=this.sim.vfs.read(srcPath+'/main.js');this.sim.vfs.write(dst+'/main.js',code);
+    this.dialog=`${meta.name} v${meta.version}\n\nInstalled successfully!`;
+    this.state=2;this.sim.launcher.scan();this.sim.refreshAppList();this.draw();
+  }
+}
+
+class CalibratorScreen{
+  constructor(sim){this.sim=sim;this.step=0;}
+  draw(){
+    const d=this.sim.disp;d.fillScreen(TFT_BLACK);d.setTextColor(TFT_WHITE,TFT_BLACK);d.setTextDatum(4);
+    d.drawString('Touch Calibration',120,140,2);d.drawString('Tap the red target',120,165,2);
+    const targets=[[20,20],[220,20],[20,300],[220,300],[120,160]];const [tx,ty]=targets[this.step%targets.length];
+    d.fillCircle(tx,ty,10,TFT_RED);d.drawCircle(tx,ty,12,TFT_WHITE);
+  }
+  handleTouch(){
+    this.step++;if(this.step>=5){this.sim.notif.post('Touch','Calibration saved!','ok');setTimeout(()=>this.sim.setState(S.SETTINGS),400);}
+    else this.draw();
+  }
+}
+
+class WebServerScreen{
+  constructor(sim){this.sim=sim;}
+  draw(){
+    const d=this.sim.disp;d.fillScreen(TFT_BLACK);d.drawRoundRect(3,3,234,314,5,TFT_WHITE);
+    d.fillRoundRect(6,6,228,30,5,TFT_BLACK);d.drawRoundRect(6,6,228,30,5,TFT_CYAN);
+    d.setTextColor(TFT_CYAN,TFT_BLACK);d.setTextDatum(4);d.drawString('Web Server',120,21,2);
+    d.setTextDatum(0);d.setTextColor(TFT_WHITE,TFT_BLACK);
+    const ip=this.sim.sim.wifi?'192.168.1.100':'0.0.0.0';
+    d.drawString('Status:',15,50,2);d.setTextColor(this.sim.sim.wifi?TFT_GREEN:TFT_RED,TFT_BLACK);
+    d.drawString(this.sim.sim.wifi?'RUNNING':'STOPPED',90,50,2);
+    d.setTextColor(TFT_WHITE,TFT_BLACK);d.drawString('IP:',15,75,2);d.setTextColor(TFT_CYAN,TFT_BLACK);
+    d.drawString(ip,50,75,2);d.setTextColor(TFT_WHITE,TFT_BLACK);d.drawString('User: admin',15,110,2);
+    d.drawString('Pass: ********',15,130,2);
+    d.drawRoundRect(5,285,230,30,5,TFT_WHITE);d.setTextColor(TFT_WHITE,TFT_BLACK);d.setTextDatum(4);d.drawString('EXIT',120,300,2);
+  }
+  handleTouch(x,y){if(y>=285)this.sim.setState(S.SETTINGS_WIFI);}
+}
+
+class UpdaterScreen{
+  constructor(sim){this.sim=sim;this.result=null;}
+  async check(){
+    this.result='checking';this.draw();
+    try{
+      const res=await fetch('https://raw.githubusercontent.com/Haris16-code/KryonOS/refs/heads/main/updates/esp32/v2/update.json');
+      const data=await res.json();const rel=data.release||data;
+      if(rel.version&&rel.version!==KRYONOS_VERSION)this.result='available:'+rel.version;else this.result='uptodate';
+    }catch(e){this.result='failed:'+e.message;}
+    this.draw();
+  }
+  draw(){
+    const d=this.sim.disp;d.fillScreen(TFT_BLACK);d.drawRoundRect(3,3,234,314,5,TFT_WHITE);
+    d.fillRoundRect(6,6,228,30,5,TFT_BLACK);d.drawRoundRect(6,6,228,30,5,TFT_GREEN);
+    d.setTextColor(TFT_GREEN,TFT_BLACK);d.setTextDatum(4);d.drawString('System Updates',120,21,2);
+    if(!this.result){d.setTextColor(TFT_YELLOW,TFT_BLACK);d.drawString('Checking for updates...',120,160,2);}
+    else if(this.result==='checking'){d.setTextColor(TFT_YELLOW,TFT_BLACK);d.drawString('Contacting server...',120,160,2);}
+    else if(this.result==='uptodate'){d.setTextColor(TFT_GREEN,TFT_BLACK);d.drawString('System is up to date!',120,120,2);d.setTextColor(TFT_CYAN,TFT_BLACK);d.drawString('Current: v'+KRYONOS_VERSION,120,145,2);}
+    else if(this.result.startsWith('available:')){d.setTextColor(TFT_YELLOW,TFT_BLACK);d.drawString('Update available',120,110,2);d.setTextColor(TFT_WHITE,TFT_BLACK);d.drawString('New: '+this.result.split(':')[1],120,135,2);}
+    else{d.setTextColor(TFT_RED,TFT_BLACK);d.drawString('Check failed',120,140,2);}
+    d.drawRoundRect(5,285,230,30,5,TFT_WHITE);d.setTextColor(TFT_WHITE,TFT_BLACK);d.drawString('BACK',120,300,2);
+  }
+  handleTouch(x,y){if(!this.result){this.check();return;}if(y>=285)this.sim.setState(S.SETTINGS);}
+}
+
+class AppsScreen{
+  constructor(sim){this.sim=sim;this.sel=-1;this.scroll=0;}
+  list(){return this.sim.vfs.listDirFull('/local/apps');}
+  draw(){
+    const d=this.sim.disp;d.fillScreen(TFT_BLACK);d.drawRoundRect(3,3,234,314,5,TFT_WHITE);
+    d.fillRoundRect(6,6,228,30,5,TFT_BLACK);d.drawRoundRect(6,6,228,30,5,TFT_GREEN);
+    d.setTextColor(TFT_GREEN,TFT_BLACK);d.setTextDatum(4);d.drawString('Manage Apps',120,21,2);
+    const items=this.list();d.fillRect(10,45,220,230,TFT_BLACK);
+    if(!items.length){d.setTextColor(TFT_DARKGREY,TFT_BLACK);d.drawString('No apps installed',120,160,2);}
+    for(let i=0;i<7;i++){
+      const idx=this.scroll+i;if(idx>=items.length)break;
+      const it=items[idx];const y=45+i*30;let label=it.name;
+      try{const meta=JSON.parse(this.sim.vfs.read(it.path+'/app.json'));label=meta.name||it.name;}catch(e){}
+      if(idx===this.sel){
+        d.fillRect(10,y,220,25,TFT_WHITE);d.setTextColor(TFT_BLACK,TFT_WHITE);d.setTextDatum(3);d.drawString('> '+label,15,y+12,2);
+      }else{
+        d.setTextColor(TFT_WHITE,TFT_BLACK);d.setTextDatum(3);d.drawString('  '+label,15,y+12,2);
+      }
+    }
+    if(this.sel>=0&&this.sel<items.length){
+      d.fillRoundRect(20,235,200,45,5,TFT_DARKGREY);d.setTextColor(TFT_YELLOW,TFT_DARKGREY);d.setTextDatum(4);
+      d.drawString('Manage: '+items[this.sel].name,120,246,1);
+      d.fillRoundRect(30,256,75,18,3,TFT_RED);d.setTextColor(TFT_WHITE,TFT_RED);d.drawString('Uninstall',67,265,1);
+      d.fillRoundRect(135,256,75,18,3,TFT_BLUE);d.setTextColor(TFT_WHITE,TFT_BLUE);d.drawString('Cancel',172,265,1);
+    }
+    d.drawRoundRect(5,285,230,30,5,TFT_WHITE);d.setTextColor(TFT_WHITE,TFT_BLACK);d.drawString('BACK',120,300,2);
+  }
+  handleTouch(x,y){
+    const items=this.list();
+    if(this.sel>=0&&y>=235&&y<=280){
+      if(x>=30&&x<=105){this.sim.vfs.remove(items[this.sel].path);this.sel=-1;this.sim.launcher.scan();this.sim.refreshAppList();this.draw();}
+      else if(x>=135&&x<=210){this.sel=-1;this.draw();}
+      return;
+    }
+    if(y>=45&&y<=230){const c=this.scroll+Math.floor((y-45)/30);if(c<items.length){this.sel=c;this.draw();}}
+    else if(y>=285)this.sim.setState(S.SETTINGS);
+  }
+}
+
+class TimeScreen{
+  constructor(sim){this.sim=sim;}
+  draw(){
+    const d=this.sim.disp;d.fillScreen(TFT_BLACK);d.drawRoundRect(3,3,234,314,5,TFT_WHITE);
+    d.fillRoundRect(6,6,228,30,5,TFT_BLACK);d.drawRoundRect(6,6,228,30,5,TFT_CYAN);
+    d.setTextColor(TFT_CYAN,TFT_BLACK);d.setTextDatum(4);d.drawString('Time & Region',120,21,2);
+    d.setTextColor(TFT_GREEN,TFT_BLACK);d.drawString(new Date().toLocaleTimeString('en-GB',{hour12:!this.sim.sim.use24h}),120,75,4);
+
+    d.fillRoundRect(20,110,200,35,5,TFT_DARKGREY);d.setTextColor(TFT_GREEN,TFT_DARKGREY);d.drawString('NTP Sync: ON',120,127,2);
+    d.fillRoundRect(20,155,200,35,5,TFT_BLUE);d.setTextColor(TFT_WHITE,TFT_BLUE);d.drawString('Region: '+this.sim.sim.timezone,120,172,2);
+    d.fillRoundRect(20,200,200,35,5,TFT_ORANGE);d.setTextColor(TFT_WHITE,TFT_ORANGE);d.drawString(this.sim.sim.use24h?'Format: 24h':'Format: 12h',120,217,2);
+    d.drawRoundRect(5,285,230,30,5,TFT_WHITE);d.setTextColor(TFT_WHITE,TFT_BLACK);d.drawString('BACK',120,300,2);
+  }
+  handleTouch(x,y){
+    if(y>=200&&y<=235){this.sim.sim.use24h=!this.sim.sim.use24h;this.sim.updateStatus();this.draw();}
+    else if(y>=285)this.sim.setState(S.SETTINGS);
+  }
+}
+
+class Simulator{
+  constructor(){
+    this.canvas=$('screen');this.overlayCanvas=$('overlay');this.overlayCtx=this.overlayCanvas.getContext('2d');
+    this.disp=new TFTDisplay(this.canvas);this.vfs=new VFS(this);this.keyboard=new OnScreenKeyboard(this);this.notif=new NotificationOverlay(this);
+    this.touch={x:0,y:0,touched:false,justPressed:false};this.exitRequested=false;this.permissions=new Set();
+    this.currentPkg='';this.pendingLaunch=null;this.pointerDown=false;
+    this.sim={board:BOARDS['esp32-s3-devkitc-1-n16r8'],wifi:true,timezone:'UTC0',use24h:true};
+    this.kryon3D=new Kryon3DEngine();
+
+    this.env={};
+    this.env.FastMath=buildFastMath();this.env.Crypto=buildCrypto();this.env.PWM=buildPWM();this.env.I2C=buildI2C();
+    this.env.Network=buildNetwork(this);this.env.HttpServer=buildHttpServer();this.env.WebSocket=buildWebSocketClass(this);
+    this.env.IPC=buildIPC(this);this.env.AI=buildAI();this.env.FS=buildFS(this);
+    this.env.System=buildSystem(this,this.disp,this.keyboard,this.notif,this.env.PWM,this.env.I2C,this.env.Crypto,this.env.IPC,this.env.AI,this.env.Network,this.env.HttpServer,this.kryon3D);
+
+    this.launcher=new LauncherScreen(this);
+    this.screens={
+      [S.LAUNCHER]:this.launcher,
+      [S.SETTINGS]:new SettingsScreen(this),
+      [S.SETTINGS_WIFI]:new WiFiScreen(this),
+      [S.SETTINGS_WIFI_SAVED]:new SavedNetworksScreen(this),
+      [S.SETTINGS_ABOUT]:new AboutScreen(this),
+      [S.SETTINGS_APPS]:new AppsScreen(this),
+      [S.SETTINGS_PERMISSIONS]:new PermissionsScreen(this),
+      [S.SETTINGS_TIME]:new TimeScreen(this),
+      [S.UPDATER_MANUAL]:new UpdaterScreen(this),
+      [S.UPDATER_BOOT]:new UpdaterScreen(this),
+      [S.APP_STORE]:new AppStoreScreen(this),
+      [S.HELP_CENTER]:new HelpScreen(this),
+      [S.INSTALLER]:new InstallerScreen(this),
+      [S.CALIBRATOR]:new CalibratorScreen(this),
+      [S.WEB_APP]:new WebServerScreen(this),
+      [S.KRYON_CLOUD]:new KryonCloudScreen(this)
+    };
+
+    this.state=S.LAUNCHER;
+    this._bindInput();this._bindUI();
+
+    this.vfs.init().then(()=>{
+      this.launcher.scan();this.refreshAppList();this.setState(S.LAUNCHER);
+    });
+
+    const loop=()=>{this.notif.render();requestAnimationFrame(loop);};requestAnimationFrame(loop);
+
+    let frames=0,last=performance.now();
+    setInterval(()=>{
+      const now=performance.now();
+      $('st-fps').textContent=Math.round(frames*1000/(now-last));
+      frames=0;last=now;
+    },1000);
+    const cf=()=>{frames++;requestAnimationFrame(cf);};requestAnimationFrame(cf);
+  }
+  onStorageChanged(){}
+  setState(s){
+    this.state=s;
+    const labels={
+      [S.LAUNCHER]:'LAUNCHER',[S.SETTINGS]:'SETTINGS',[S.RUN_APP]:'RUN_APP',
+      [S.APP_STORE]:'APP_STORE',[S.SETTINGS_WIFI]:'WIFI',[S.SETTINGS_ABOUT]:'ABOUT',
+      [S.HELP_CENTER]:'HELP',[S.INSTALLER]:'INSTALLER',[S.KRYON_CLOUD]:'CLOUD',
+      [S.SETTINGS_PERMISSIONS]:'PERMISSIONS',[S.SETTINGS_WIFI_SAVED]:'SAVED_WIFI'
+    };
+    $('st-state').textContent=labels[s]||('STATE_'+s);
+    const eb=$('hw-exit-btn');
+    if(s===S.RUN_APP)eb.classList.add('active');else eb.classList.remove('active');
+    if(s===S.RUN_APP)return;
+    this.disp.resetState();this.disp.activeSprite=null;this.disp.spriteBound=false;this.disp.fillScreen(TFT_BLACK);
+    const scr=this.screens[s];if(scr&&scr.draw)scr.draw();
+  }
+  _bindInput(){
+    const cvs=this.canvas;
+    const getXY=(cx,cy)=>{
+      const r=cvs.getBoundingClientRect();
+      return {x:clamp(Math.floor((cx-r.left)*cvs.width/r.width),0,cvs.width-1),y:clamp(Math.floor((cy-r.top)*cvs.height/r.height),0,cvs.height-1)};
+    };
+    const pressAt=(cx,cy)=>{const p=getXY(cx,cy);this.pointerDown=true;this._handlePress(p.x,p.y);};
+    const moveAt=(cx,cy)=>{
+      if(!this.pointerDown&&this.state!==S.RUN_APP)return;
+      const p=getXY(cx,cy);
+      if(this.state===S.RUN_APP){this.touch.x=p.x;this.touch.y=p.y;}
+    };
+    const release=()=>{this.pointerDown=false;if(this.state===S.RUN_APP)this.touch.touched=false;};
+
+    cvs.addEventListener('mousedown',e=>{e.preventDefault();pressAt(e.clientX,e.clientY);});
+    cvs.addEventListener('mousemove',e=>{moveAt(e.clientX,e.clientY);});
+    window.addEventListener('mouseup',release);
+    cvs.addEventListener('touchstart',e=>{e.preventDefault();const t=e.changedTouches[0];pressAt(t.clientX,t.clientY);},{passive:false});
+    cvs.addEventListener('touchmove',e=>{e.preventDefault();const t=e.changedTouches[0];moveAt(t.clientX,t.clientY);},{passive:false});
+    cvs.addEventListener('touchend',e=>{e.preventDefault();release();},{passive:false});
+
+    $('hw-exit-btn').addEventListener('click',()=>{this.exitRequested=true;if(this.keyboard.active)this.keyboard._finish('');});
+    $('hw-cam-btn').addEventListener('click',()=>this.captureScreenshot());
+    document.querySelectorAll('.ctrl-btn').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        const scr=this.screens[this.state];
+        if(scr&&scr.handleTouch){
+          const k=btn.dataset.key;const y=this.disp.H-20;
+          if(k==='up')scr.handleTouch(30,y);else if(k==='sel')scr.handleTouch(120,y);else if(k==='dn')scr.handleTouch(210,y);
+        }
+      });
+    });
+  }
+  _handlePress(x,y){
+    if(this.state===S.RUN_APP&&x>=200&&y<=40){this.exitRequested=true;return;}
+    if(this.keyboard.active){this.keyboard.handleTouch(x,y);return;}
+    if(this.state===S.RUN_APP){this.touch.x=x;this.touch.y=y;this.touch.touched=true;this.touch.justPressed=true;return;}
+    const scr=this.screens[this.state];if(scr&&scr.handleTouch)scr.handleTouch(x,y);
+  }
+  captureScreenshot(){
+    try{
+      const w=this.canvas.width,h=this.canvas.height;
+      const merged=document.createElement('canvas');merged.width=w;merged.height=h;
+      const mctx=merged.getContext('2d');mctx.imageSmoothingEnabled=false;
+      mctx.drawImage(this.canvas,0,0);mctx.drawImage(this.overlayCanvas,0,0);
+      const a=document.createElement('a');const ts=new Date().toISOString().replace(/[:.]/g,'-');
+      a.download=`kryonos_${this.state}_${ts}.png`;a.href=merged.toDataURL('image/png');
+      document.body.appendChild(a);a.click();document.body.removeChild(a);
+      this.notif.post('Screenshot','Saved to downloads','success',2000);
+    }catch(e){}
+  }
+  render3D(x=0,y=0){if(this.kryon3D.sprite)this.disp.ctx.drawImage(this.kryon3D.sprite.canvas,x,y);}
+  async launchApp(app,codeOverride){
+    let rawCode=codeOverride!=null?codeOverride:this.vfs.read(app.isLegacy?app.path:app.path+'/main.js');
+    if(!rawCode){log('App main.js not found at '+app.path,'err');return;}
+
+    this.exitRequested=false;this.touch={x:0,y:0,touched:false,justPressed:false};this.pointerDown=false;
+    this.currentPkg=app.pkg||app.name;
+
+    const appDir=app.path.endsWith('/')?app.path:app.path+'/';
+    this.env.FS._setSandboxRoot(appDir);
+    this.env.IPC._setCurrentAppId(this.currentPkg);
+    this.env.IPC._setLaunchArgs('');
+
+    this.setState(S.RUN_APP);
+    this.disp.resetState();this.disp.activeSprite=null;this.disp.spriteBound=false;this.disp.fillScreen(TFT_BLACK);
+
+    let transformed;
+    try{transformed=transpile(rawCode);}catch(err){await this._showError(err.message);return;}
+
+    const scopeKeys=[
+      'System','FS','Network','HttpServer','WebSocket','Notification','IPC','Kryon','AI','PWM','I2C','Crypto','Kryon3D','FastMath','console','print','println',
+      'BLACK','WHITE','RED','GREEN','BLUE','YELLOW','CYAN','MAGENTA','ORANGE','DARKGREY','LIGHTGREY','PURPLE','NAVY','GOLD',
+      'C_BLACK','C_WHITE','C_RED','C_GREEN','C_BLUE','C_YELLOW','C_CYAN','C_MAGENTA','C_ORANGE','C_DARKGREY','C_PURPLE','C_NAVY','C_GOLD'
+    ];
+    const scopeVals=[
+      this.env.System,this.env.FS,this.env.Network,this.env.HttpServer,this.env.WebSocket,this.notif,this.env.IPC,{ai:this.env.AI},this.env.AI,this.env.PWM,this.env.I2C,this.env.Crypto,this.kryon3D,this.env.FastMath,
+      {log:(...a)=>log(a.join(' '),'info'),error:(...a)=>log(a.join(' '),'err'),warn:(...a)=>log(a.join(' '),'warn'),info:(...a)=>log(a.join(' '),'info'),debug:(...a)=>log(a.join(' '),'dim')},
+      (...a)=>log(a.join(' ')),(...a)=>log(a.join(' ')),
+      TFT_BLACK,TFT_WHITE,TFT_RED,TFT_GREEN,TFT_BLUE,TFT_YELLOW,TFT_CYAN,TFT_MAGENTA,TFT_ORANGE,TFT_DARKGREY,TFT_LIGHTGREY,TFT_PURPLE,TFT_NAVY,TFT_GOLD,
+      TFT_BLACK,TFT_WHITE,TFT_RED,TFT_GREEN,TFT_BLUE,TFT_YELLOW,TFT_CYAN,TFT_MAGENTA,TFT_ORANGE,TFT_DARKGREY,TFT_PURPLE,TFT_NAVY,TFT_GOLD
+    ];
+
+    let fn;
+    try{
+      fn=new Function(...scopeKeys,`"use strict"; return (async () => { ${transformed} })();`);
+    }catch(err){
+      await this._showError('Compile error: '+err.message);return;
+    }
+    log('▶ Running: '+app.name,'info');
+    try{
+      await fn(...scopeVals);log('■ App finished normally');
+    }catch(e){
+      audioHW.reset();
+      if(e.message==='OS_EXIT'||e.code==='OS_EXIT')log('■ Exited via OS_EXIT');
+      else{log('✖ Exception: '+e.message,'err');await this._showError(e.message);return;}
+    }
+
+    this.env.FS._setSandboxRoot('');this.env.IPC._clear();this.kryon3D.end();
+    this.disp.activeSprite=null;this.disp.spriteBound=false;
+
+    if(this.pendingLaunch){
+      const p=this.pendingLaunch;this.pendingLaunch=null;
+      const chainedApp={name:'chained',path:p.path,pkg:'chained'};
+      this.env.IPC._setLaunchArgs(p.args);
+      await this.launchApp(chainedApp);
+      return;
+    }
+    this.exitRequested=false;this.setState(S.LAUNCHER);
+  }
+  _showError(msg){
+    this.state=S.RUN_APP;$('st-state').textContent='ERROR';
+    this.disp.resetState();this.disp.activeSprite=null;this.disp.spriteBound=false;
+    this.disp.fillScreen(TFT_RED);this.disp.drawString('JS EXCEPTION!',10,10,4);
+    const lines=String(msg).split('\n');let y=60;
+    for(let i=0;i<lines.length&&i<8;i++){this.disp.drawString(lines[i].substring(0,38),10,y,2);y+=20;}
+    return new Promise(res=>{
+      const check=setInterval(()=>{if(this.exitRequested){clearInterval(check);res();}},40);
+    }).then(()=>{this.exitRequested=false;this.setState(S.LAUNCHER);});
+  }
+  reboot(){
+    this.disp.resetState();this.disp.activeSprite=null;this.disp.spriteBound=false;this.disp.fillScreen(TFT_BLACK);
+    this.notif.clearAll();this.setState(S.LAUNCHER);
+  }
+  updateStatus(){
+    $('st-wifi').textContent=this.sim.wifi?'ONLINE':'OFF';
+    $('st-wifi').style.color=this.sim.wifi?'var(--accent)':'var(--err)';
+    $('st-heap').textContent=(this.sim.wifi?384:448)+' KB';
+  }
+  refreshAppList(){
+    const el=$('app-list');el.innerHTML='';this.launcher.scan();
+    for(const app of this.launcher.apps){
+      const row=document.createElement('div');row.className='app-row';
+      const left=document.createElement('div');left.innerHTML=`<strong>${app.name}</strong><br><span class="meta">${app.pkg}</span>`;
+      const right=document.createElement('div');right.className='actions';
+      const b1=document.createElement('button');b1.className='btn sec';b1.textContent='▶ Run';b1.onclick=()=>this.launchApp(app);
+      const b2=document.createElement('button');b2.className='btn danger';b2.textContent='✕';
+      b2.onclick=()=>{if(!confirm('Delete '+app.name+'?'))return;this.vfs.remove(app.path);this.refreshAppList();this.launcher.scan();};
+      right.appendChild(b1);right.appendChild(b2);row.appendChild(left);row.appendChild(right);el.appendChild(row);
+    }
+    if(!this.launcher.apps.length)el.innerHTML='<div class="empty">No apps installed. Use Studio tab or App Store.</div>';
+  }
+  _bindUI(){
+    document.querySelectorAll('.tab').forEach(t=>{
+      t.onclick=()=>{
+        document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+        document.querySelectorAll('.tab-pane').forEach(x=>x.classList.remove('active'));
+        t.classList.add('active');
+        document.querySelector(`.tab-pane[data-pane="${t.dataset.tab}"]`).classList.add('active');
+      };
+    });
+    $('btn-refresh-apps').onclick=()=>this.refreshAppList();
+    $('btn-seed-demo').onclick=async()=>{await this.vfs.seedDefaults();this.refreshAppList();this.launcher.scan();this.notif.post('Storage','Demo apps ready','ok');};
+    
+    // Set default editor code
+    $('app-code').value=`// Touch Counter Demo
+var bg = System.color(18,18,28);
+System.fillScreen(bg);
+var count = 0;
+
+function drawUI() {
+  System.fillScreen(bg);
+  System.setTextColor(WHITE, bg);
+  System.drawString("Touch Counter", 35, 30, 4);
+  System.setTextColor(CYAN, bg);
+  System.drawString("Count: " + count, 75, 110, 4);
+  System.fillRoundRect(30, 200, 180, 50, 8, GREEN);
+  System.setTextColor(BLACK, GREEN);
+  System.drawString("TAP TO COUNT", 45, 215, 2);
+}
+
+drawUI();
+
+while (true) {
+  var t = System.getTouch();
+  if (t.touched) {
+    if (t.y >= 200 && t.y <= 250 && t.x >= 30 && t.x <= 210) {
+      count++;
+      PWM.setTone(18, 1200 + count * 40, 60);
+      drawUI();
+    }
+  }
+  System.delay(40);
+}`;
+
+    $('btn-install').onclick=()=>{
+      const name=$('app-name').value.trim()||'Crypto Workbench';
+      const pkg=$('app-pkg').value.trim().toLowerCase()||'com.kryonos.cryptotest';
+      const version=($('app-ver')?$('app-ver').value.trim():'1.0.0')||'1.0.0';
+      const author=($('app-author')?$('app-author').value.trim():'KryonDev')||'KryonDev';
+      const category=($('app-cat')?$('app-cat').value:'Security')||'Security';
+      const code=$('app-code').value;
+
+      const perms=['storage'];
+      const manifest={name,packageName:pkg,version,api:KRYONOS_API_LEVEL,author,type:'App',category,description:'KryonOS Workbench',permissions:perms,allowCompanionLaunch:true};
+      const dir='/local/apps/'+pkg;
+      this.vfs.mkdir(dir);
+      this.vfs.write(dir+'/app.json',JSON.stringify(manifest,null,2));
+      this.vfs.write(dir+'/main.js',code);
+
+      perms.forEach(p=>this.permissions.add(`${pkg}:${p}`));
+      this.env.IPC.registerApp(pkg,dir,name,category,[],true);
+
+      log(`💾 Installed "${name}" (${pkg}) v${version}`,'ok');
+      this.refreshAppList();this.launcher.scan();this.notif.post('Installed',`${name} ready`,'success',2500);
+    };
+    $('btn-run-live').onclick=()=>{
+      const name=$('app-name').value.trim()||'Live Test';
+      const code=$('app-code').value;
+      this.launchApp({name,path:'/tmp/live/',pkg:'com.kryon.live'},code);
+    };
+    $('btn-format').onclick=async()=>{if(!confirm('Format flash?'))return;await this.vfs.reset();this.refreshAppList();this.launcher.scan();};
+    $('board-select').onchange=e=>{
+      const b=BOARDS[e.target.value];if(!b)return;
+      this.sim.board=b;this.canvas.width=b.w;this.canvas.height=b.h;
+      this.overlayCanvas.width=b.w;this.overlayCanvas.height=b.h;
+      this.disp.W=b.w;this.disp.H=b.h;$('board-label').textContent=b.name;this.reboot();
+    };
+    $('sim-time').oninput=e=>{this.sim.timezone=e.target.value;};
+    $('sim-24h').onchange=e=>{this.sim.use24h=e.target.checked;};
+    $('sim-wifi').onchange=e=>{this.sim.wifi=e.target.checked;this.updateStatus();};
+    $('btn-reboot').onclick=()=>this.reboot();
+    $('btn-launcher').onclick=()=>this.setState(S.LAUNCHER);
+    $('btn-shot').onclick=()=>this.captureScreenshot();
+    $('btn-clear-log').onclick=()=>{consoleEl.innerHTML='';};
+    this.updateStatus();
+  }
+}
+
+window.addEventListener('DOMContentLoaded',()=>{
+  log('KryonOS Web Emulator Engine v'+KRYONOS_VERSION,'sys');
+  log('Full C++ API Parity: FastMath, Synchronous Crypto, KryonCloud, VFS, PWM, I2C.','sys');
+  window.KryonOS=new Simulator();
+  setTimeout(()=>log('Simulator initialized. Paste your Crypto script into Studio and tap "Run Live"!','ok'),300);
+});
