@@ -1,3 +1,4 @@
+
 'use strict';
 
 // 1:1 Palette matching TFT_eSPI
@@ -53,7 +54,7 @@ class AudioPWM{
 const audioHW=new AudioPWM();
 
 class VFS{
-  constructor(sim){this.sim=sim;this.dbName='KryonOS_VFS_v11';this.store='files';this.db=null;this.cache=new Map();}
+  constructor(sim){this.sim=sim;this.dbName='KryonOS_VFS_v12';this.store='files';this.db=null;this.cache=new Map();}
   async init(){
     return new Promise(resolve=>{
       try{
@@ -223,7 +224,7 @@ class VirtualSprite{
 class Kryon3DEngine{
   constructor(){this.reset();}
   reset(){
-    this.sprite=null;this.directDraw=false;this.vpX=0;this.vpY=0;this.vpW=0;this.vpH=0;
+    this.sprite=null;this._directDraw=false;this.vpX=0;this.vpY=0;this.vpW=0;this.vpH=0;
     this.camPos=[0,0,-5];this.camTarget=[0,0,0];this.camFov=60;
     this.lightDir=[0.577,-0.577,0.577];this.lightAmbient=0.3;this.lightDiffuse=0.7;
     this.fog={enabled:false,color:0x0000,near:5,far:20};
@@ -243,7 +244,8 @@ class Kryon3DEngine{
     const dx=wx-cx,dy=wy-cy,dz=wz-cz;
     const ecx=dx*rx+dy*ry+dz*rz,ecy=dx*ux+dy*uy+dz*uz,ecz=dx*fx+dy*fy+dz*fz;
     if(ecz<=0.05)return null;
-    const tanHalf=Math.tan(this.camFov*0.5*Math.PI/180)||0.001;const scale=(this.vpW*0.5)/tanHalf;
+    const tanHalf=Math.tan(this.camFov*0.5*Math.PI/180)||0.001;
+    const scale=(this.vpW*0.5)/tanHalf;
     return {x:(ecx/ecz)*scale+this.vpW*0.5+this.vpX,y:-(ecy/ecz)*scale+this.vpH*0.5+this.vpY,z:ecz};
   }
   _shade(base,nx,ny,nz){
@@ -312,7 +314,10 @@ class Kryon3DEngine{
   }
   getWidth(){return this.sprite?this.sprite.canvas.width:0;}
   getHeight(){return this.sprite?this.sprite.canvas.height:0;}
-  directDraw(v){if(v!=null)this.directDraw=!!v;return this.directDraw;}
+  directDraw(v){
+    if(v!=null)this._directDraw=!!v;
+    return this._directDraw;
+  }
 }
 
 class NotificationOverlay{
@@ -790,7 +795,32 @@ function buildAI(){
   };
 }
 
-function buildSystem(sim,disp,keyboard,notif,pwm,i2c,crypto,ipc,ai,net,httpserver,kryon3D){
+/* ─── Kryon3D Bridge Helper ─── */
+function buildKryon3DBridge(sim) {
+  const k = sim.kryon3D;
+  return {
+    begin: (w, h) => k.begin(w, h),
+    clear: c => k.clear(c),
+    render: (x, y) => sim.render3D(x, y),
+    flush: (x, y) => sim.render3D(x, y),
+    end: () => k.end(),
+    setViewport: (x, y, w, h) => k.setViewport(x, y, w, h),
+    setCamera: (px, py, pz, tx, ty, tz, fov) => k.setCamera(px, py, pz, tx, ty, tz, fov),
+    setLight: (lx, ly, lz, amb, dif) => k.setLight(lx, ly, lz, amb, dif),
+    setFog: (e, c, n, f) => k.setFog(e, c, n, f),
+    drawLine: (...a) => k.drawLine(...a),
+    drawTriangle: (...a) => k.drawTriangle(...a),
+    fillTriangle: (...a) => k.fillTriangle(...a),
+    drawCube: (...a) => k.drawCube(...a),
+    drawBillboard: (...a) => k.drawBillboard(...a),
+    drawMesh: (...a) => k.drawMesh(...a),
+    getWidth: () => k.getWidth(),
+    getHeight: () => k.getHeight(),
+    directDraw: v => k.directDraw(v)
+  };
+}
+
+function buildSystem(sim,disp,keyboard,notif,pwm,i2c,crypto,ipc,ai,net,httpserver,kryon3DObj){
   const startTime=Date.now();
   const fastMath=buildFastMath();
   const scope=sim.sim;
@@ -845,6 +875,7 @@ function buildSystem(sim,disp,keyboard,notif,pwm,i2c,crypto,ipc,ai,net,httpserve
     delayMicroseconds:async us=>{await sleep(Math.max(1,(us/1000)|0));},
     print:(...a)=>log(a.join(' '),'info'),
     println:(...a)=>log(a.join(' '),'info'),
+    log:(...a)=>log(a.join(' '),'info'),
     getInfo:()=>({
       totalRAM:512*1024,freeRAM:384*1024,minFreeRAM:200*1024,maxAllocRAM:160*1024,
       cpuFreqMHz:240,chipModel:scope.board.chip,chipCores:2,chipRevision:1,
@@ -871,13 +902,7 @@ function buildSystem(sim,disp,keyboard,notif,pwm,i2c,crypto,ipc,ai,net,httpserve
     },
     gpio:{pinMode:()=>{},digitalWrite:()=>{},digitalRead:()=>0,analogRead:()=>512,analogWrite:()=>{},pulseIn:()=>0,OUTPUT:1,INPUT:0,INPUT_PULLUP:2,HIGH:1,LOW:0},
     i2c,pwm,crypto,math:fastMath,ipc,ai,
-    graphics3d:{
-      begin:(w,h)=>kryon3D.begin(w,h),clear:c=>kryon3D.clear(c),render:(x,y)=>sim.render3D(x,y),flush:(x,y)=>sim.render3D(x,y),end:()=>kryon3D.end(),
-      setViewport:(...a)=>kryon3D.setViewport(...a),setCamera:(...a)=>kryon3D.setCamera(...a),setLight:(...a)=>kryon3D.setLight(...a),setFog:(...a)=>kryon3D.setFog(...a),
-      drawLine:(...a)=>kryon3D.drawLine(...a),drawTriangle:(...a)=>kryon3D.drawTriangle(...a),fillTriangle:(...a)=>kryon3D.fillTriangle(...a),
-      drawCube:(...a)=>kryon3D.drawCube(...a),drawBillboard:(...a)=>kryon3D.drawBillboard(...a),drawMesh:(...a)=>kryon3D.drawMesh(...a),
-      getWidth:()=>kryon3D.getWidth(),getHeight:()=>kryon3D.getHeight(),directDraw:v=>kryon3D.directDraw(v)
-    }
+    graphics3d:kryon3DObj
   };
 }
 
@@ -1650,6 +1675,9 @@ class WebServerScreen{
     d.drawString(ip,50,75,2);d.setTextColor(TFT_WHITE,TFT_BLACK);
     d.drawString('User: admin',15,110,2);
     d.drawString('Pass: ********',15,130,2);
+    d.setTextColor(TFT_DARKGREY,TFT_BLACK);
+    d.drawString('(browser-based server not',15,170,2);
+    d.drawString(' available in web emulator)',15,190,2);
     d.drawRoundRect(5,285,230,30,5,TFT_WHITE);d.setTextColor(TFT_WHITE,TFT_BLACK);d.setTextDatum(4);d.drawString('EXIT',120,300,2);
   }
   handleTouch(x,y){if(y>=285)this.sim.setState(S.SETTINGS_WIFI);}
@@ -1758,7 +1786,8 @@ class Simulator{
     this.env.IPC=buildIPC(this);
     this.env.AI=buildAI();
     this.env.FS=buildFS(this);
-    this.env.System=buildSystem(this,this.disp,this.keyboard,this.notif,this.env.PWM,this.env.I2C,this.env.Crypto,this.env.IPC,this.env.AI,this.env.Network,this.env.HttpServer,this.kryon3D);
+    this.env.Kryon3D=buildKryon3DBridge(this);
+    this.env.System=buildSystem(this,this.disp,this.keyboard,this.notif,this.env.PWM,this.env.I2C,this.env.Crypto,this.env.IPC,this.env.AI,this.env.Network,this.env.HttpServer,this.env.Kryon3D);
 
     this.launcher=new LauncherScreen(this);
     this.screens={
@@ -1889,7 +1918,7 @@ class Simulator{
       'C_BLACK','C_WHITE','C_RED','C_GREEN','C_BLUE','C_YELLOW','C_CYAN','C_MAGENTA','C_ORANGE','C_DARKGREY','C_PURPLE','C_NAVY','C_GOLD'
     ];
     const scopeVals=[
-      this.env.System,this.env.FS,this.env.Network,this.env.HttpServer,this.env.WebSocket,this.notif,this.env.IPC,{ai:this.env.AI},this.env.AI,this.env.PWM,this.env.I2C,this.env.Crypto,this.kryon3D,this.env.FastMath,
+      this.env.System,this.env.FS,this.env.Network,this.env.HttpServer,this.env.WebSocket,this.notif,this.env.IPC,{ai:this.env.AI},this.env.AI,this.env.PWM,this.env.I2C,this.env.Crypto,this.env.Kryon3D,this.env.FastMath,
       {log:(...a)=>log(a.join(' '),'info'),error:(...a)=>log(a.join(' '),'err'),warn:(...a)=>log(a.join(' '),'warn'),info:(...a)=>log(a.join(' '),'info'),debug:(...a)=>log(a.join(' '),'dim')},
       (...a)=>log(a.join(' ')),(...a)=>log(a.join(' ')),
       TFT_BLACK,TFT_WHITE,TFT_RED,TFT_GREEN,TFT_BLUE,TFT_YELLOW,TFT_CYAN,TFT_MAGENTA,TFT_ORANGE,TFT_DARKGREY,TFT_LIGHTGREY,TFT_PURPLE,TFT_NAVY,TFT_GOLD,
@@ -1921,7 +1950,8 @@ class Simulator{
       await this.launchApp(chainedApp);
       return;
     }
-    this.exitRequested=false;this.setState(S.LAUNCHER);
+    this.exitRequested=false;
+    this.setState(S.LAUNCHER);
   }
   _showError(msg){
     this.state=S.RUN_APP;$('st-state').textContent='ERROR';
@@ -1934,8 +1964,10 @@ class Simulator{
     }).then(()=>{this.exitRequested=false;this.setState(S.LAUNCHER);});
   }
   reboot(){
-    this.disp.resetState();this.disp.activeSprite=null;this.disp.spriteBound=false;this.disp.fillScreen(TFT_BLACK);
-    this.notif.clearAll();this.setState(S.LAUNCHER);
+    this.disp.resetState();this.disp.activeSprite=null;this.disp.spriteBound=false;
+    this.disp.fillScreen(TFT_BLACK);
+    this.notif.clearAll();
+    this.setState(S.LAUNCHER);
   }
   updateStatus(){
     $('st-wifi').textContent=this.sim.wifi?'ONLINE':'OFF';
