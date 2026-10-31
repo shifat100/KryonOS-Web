@@ -53,7 +53,7 @@ class AudioPWM{
 const audioHW=new AudioPWM();
 
 class VFS{
-  constructor(sim){this.sim=sim;this.dbName='KryonOS_VFS_v10';this.store='files';this.db=null;this.cache=new Map();}
+  constructor(sim){this.sim=sim;this.dbName='KryonOS_VFS_v11';this.store='files';this.db=null;this.cache=new Map();}
   async init(){
     return new Promise(resolve=>{
       try{
@@ -76,7 +76,9 @@ class VFS{
       if(!this.db)return resolve();
       const tx=this.db.transaction(this.store,'readonly');
       const req=tx.objectStore(this.store).getAll();
-      req.onsuccess=()=>{this.cache.clear();(req.result||[]).forEach(it=>this.cache.set(it.path,it));resolve();};
+      req.onsuccess=()=>{
+        this.cache.clear();(req.result||[]).forEach(it=>this.cache.set(it.path,it));resolve();
+      };
       req.onerror=()=>resolve();
     });
   }
@@ -133,7 +135,7 @@ while (true) {
   remove(p){
     const clean=this._norm(p);this.cache.delete(clean);
     for(const k of [...this.cache.keys()])if(k.startsWith(clean+'/'))this.cache.delete(k);
-    if(this.db){try{const tx=this.db.transaction(this.store,'readwrite');const store=tx.objectStore(this.store);store.delete(clean);}catch(e){}}
+    if(this.db){try{const tx=this.db.transaction(this.store,'readwrite');const store=tx.objectStore(this.store);store.delete(clean);for(const k of [...this.cache.keys()])if(k.startsWith(clean+'/'))store.delete(k);}catch(e){}}
     if(this.sim)this.sim.onStorageChanged();
     return true;
   }
@@ -199,6 +201,14 @@ class TFTDisplay{
     if(this.bg){t.fillStyle=this.bg;t.fillRect(rx,ry,w,sz);}
     t.fillStyle=this.fg;t.fillText(str,rx,ry);
   }
+  drawBMP(sim, path, x, y) {
+    const content = sim.vfs.read(path);
+    if (!content) return false;
+    this.fillRect(x, y, 40, 40, TFT_NAVY);
+    this.drawRect(x, y, 40, 40, TFT_CYAN);
+    this.drawString("BMP", x + 8, y + 12, 2);
+    return true;
+  }
   color(r,g,b){r=clamp(r|0,0,255);g=clamp(g|0,0,255);b=clamp(b|0,0,255);return ((r&0xF8)<<8)|((g&0xFC)<<3)|(b>>3);}
 }
 
@@ -233,8 +243,7 @@ class Kryon3DEngine{
     const dx=wx-cx,dy=wy-cy,dz=wz-cz;
     const ecx=dx*rx+dy*ry+dz*rz,ecy=dx*ux+dy*uy+dz*uz,ecz=dx*fx+dy*fy+dz*fz;
     if(ecz<=0.05)return null;
-    const tanHalf=Math.tan(this.camFov*0.5*Math.PI/180)||0.001;
-    const scale=(this.vpW*0.5)/tanHalf;
+    const tanHalf=Math.tan(this.camFov*0.5*Math.PI/180)||0.001;const scale=(this.vpW*0.5)/tanHalf;
     return {x:(ecx/ecz)*scale+this.vpW*0.5+this.vpX,y:-(ecy/ecz)*scale+this.vpH*0.5+this.vpY,z:ecz};
   }
   _shade(base,nx,ny,nz){
@@ -505,7 +514,7 @@ function buildFastMath(){
 }
 
 /* ─── PURE SYNCHRONOUS SHA-256 / SHA-512 / HMAC ENGINE ─── */
-function buildCrypto(){
+function buildCrypto(sim){
   function sha256Sync(ascii) {
     function rightRotate(value, amount) { return (value>>>amount) | (value<<(32 - amount)); }
     var mathPow = Math.pow;
@@ -568,7 +577,16 @@ function buildCrypto(){
       for(let i = 0; i < n; i++) s += Math.floor(Math.random() * 256).toString(16).padStart(2, '0');
       return s;
     },
-    rsaVerify: () => true
+    rsaVerify: () => true,
+    sha256File: path => {
+      if (!sim) return '';
+      const c = sim.vfs.read(path);
+      return c ? sha256Sync(c) : '';
+    },
+    deviceEncrypt: plain => btoa(unescape(encodeURIComponent(String(plain)))),
+    deviceDecrypt: cipher => {
+      try { return decodeURIComponent(escape(atob(cipher))); } catch(e) { return String(cipher); }
+    }
   };
 }
 
@@ -799,6 +817,7 @@ function buildSystem(sim,disp,keyboard,notif,pwm,i2c,crypto,ipc,ai,net,httpserve
     fillTriangle:(...a)=>disp.fillTriangle(...a),
     drawRoundRect:(...a)=>disp.drawRoundRect(...a),
     fillRoundRect:(...a)=>disp.fillRoundRect(...a),
+    drawBMP:(p,x,y)=>disp.drawBMP(sim,p,x,y),
     drawString:(s,x,y,f=2)=>disp.drawString(s,x,y,f),
     setTextColor:(f,b)=>disp.setTextColor(f,b),
     setTextDatum:d=>disp.setTextDatum(d),
@@ -1142,10 +1161,18 @@ class KryonCloudScreen{
     this.sim=sim;this.tab='HOME';this.aiPrompt='Explain FreeRTOS IPC';
     this.aiResponse='Ready. Tap "Ask AI" to query.';
     this.beamScope='MAILBOX';this.driveScope='SHARED';
+    this.isBanned=false;
   }
   draw(){
     const d=this.sim.disp;
-    d.fillScreen(TFT_BLACK);d.fillRect(0,0,240,56,0x10A2);d.drawFastHLine(0,56,240,0x39E8);
+    d.fillScreen(TFT_BLACK);
+
+    if(this.isBanned){
+      this._drawBanned();
+      return;
+    }
+
+    d.fillRect(0,0,240,56,0x10A2);d.drawFastHLine(0,56,240,0x39E8);
     d.fillCircle(12,14,4,this.sim.sim.wifi?TFT_GREEN:TFT_RED);d.setTextColor(TFT_WHITE,0x10A2);
     d.setTextDatum(3);d.drawString('KryonCloud',22,14,2);
     d.fillRoundRect(208,4,26,20,4,0x8800);d.setTextColor(TFT_WHITE,0x8800);d.setTextDatum(4);d.drawString('X',221,14,2);
@@ -1165,6 +1192,21 @@ class KryonCloudScreen{
     else if(this.tab==='DRIVE')this._drawDrive();
     else if(this.tab==='LIMITS')this._drawLimits();
     else if(this.tab==='PAIRING')this._drawPairing();
+  }
+  _drawBanned(){
+    const d=this.sim.disp;
+    d.fillRoundRect(10,40,220,230,6,TFT_DARKGREY);
+    d.drawRoundRect(10,40,220,230,6,TFT_RED);
+    d.setTextColor(TFT_RED,TFT_DARKGREY);
+    d.setTextDatum(4);
+    d.drawString('DEVICE SUSPENDED',120,65,2);
+    d.setTextColor(TFT_WHITE,TFT_DARKGREY);
+    d.drawString('Account or board is banned.',120,100,2);
+    d.drawString('Visit kryonos.harislab.tech',120,130,2);
+    d.drawString('to submit an appeal.',120,150,2);
+    d.fillRoundRect(40,210,160,35,4,0x229F);
+    d.setTextColor(TFT_WHITE,0x229F);
+    d.drawString('Back to Launcher',120,227,2);
   }
   _drawHome(){
     const d=this.sim.disp;
@@ -1222,8 +1264,7 @@ class KryonCloudScreen{
     d.fillRoundRect(8,120,224,44,4,0x18E4);d.drawRoundRect(8,120,224,44,4,0x39E8);
     d.setTextDatum(0);d.setTextColor(TFT_YELLOW,0x18E4);
     d.drawString(this.beamScope==='MAILBOX'?'@ops-node':'@guest-78',14,124,2);
-    d.setTextColor(TFT_WHITE,0x18E4);
-    d.drawString('Node heartbeat verified.',14,142,2);
+    d.setTextColor(TFT_WHITE,0x18E4);d.drawString('Node heartbeat verified.',14,142,2);
   }
   _drawDrive(){
     const d=this.sim.disp;
@@ -1259,6 +1300,10 @@ class KryonCloudScreen{
     d.fillRoundRect(40,240,160,34,5,0x229F);d.setTextColor(TFT_WHITE,0x229F);d.drawString('Return Home',120,257,2);
   }
   handleTouch(x,y){
+    if(this.isBanned){
+      if(y>=210&&y<=245)this.sim.setState(S.LAUNCHER);
+      return;
+    }
     if(x>=200&&y<=26){this.sim.setState(S.LAUNCHER);return;}
     if(y>=28&&y<=54){
       const idx=Math.floor((x-3)/47);
@@ -1600,8 +1645,10 @@ class WebServerScreen{
     const ip=this.sim.sim.wifi?'192.168.1.100':'0.0.0.0';
     d.drawString('Status:',15,50,2);d.setTextColor(this.sim.sim.wifi?TFT_GREEN:TFT_RED,TFT_BLACK);
     d.drawString(this.sim.sim.wifi?'RUNNING':'STOPPED',90,50,2);
-    d.setTextColor(TFT_WHITE,TFT_BLACK);d.drawString('IP:',15,75,2);d.setTextColor(TFT_CYAN,TFT_BLACK);
-    d.drawString(ip,50,75,2);d.setTextColor(TFT_WHITE,TFT_BLACK);d.drawString('User: admin',15,110,2);
+    d.setTextColor(TFT_WHITE,TFT_BLACK);
+    d.drawString('IP:',15,75,2);d.setTextColor(TFT_CYAN,TFT_BLACK);
+    d.drawString(ip,50,75,2);d.setTextColor(TFT_WHITE,TFT_BLACK);
+    d.drawString('User: admin',15,110,2);
     d.drawString('Pass: ********',15,130,2);
     d.drawRoundRect(5,285,230,30,5,TFT_WHITE);d.setTextColor(TFT_WHITE,TFT_BLACK);d.setTextDatum(4);d.drawString('EXIT',120,300,2);
   }
@@ -1702,7 +1749,7 @@ class Simulator{
 
     this.env={};
     this.env.FastMath=buildFastMath();
-    this.env.Crypto=buildCrypto();
+    this.env.Crypto=buildCrypto(this);
     this.env.PWM=buildPWM();
     this.env.I2C=buildI2C();
     this.env.Network=buildNetwork(this);
@@ -1968,5 +2015,5 @@ window.addEventListener('DOMContentLoaded',()=>{
   log('KryonOS Web Emulator Engine v'+KRYONOS_VERSION,'sys');
   log('Full C++ API Parity: FastMath, Synchronous Crypto, KryonCloud, VFS, PWM, I2C.','sys');
   window.KryonOS=new Simulator();
-  setTimeout(()=>log('Simulator initialized. Paste your Crypto script into Studio and tap "Run Live"!','ok'),300);
+  setTimeout(()=>log('Simulator ready.','ok'),300);
 });
