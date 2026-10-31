@@ -1373,7 +1373,7 @@ class AboutScreen{
     d.setTextColor(TFT_ORANGE,0x10A2);d.drawString('SD:    Virtual (mounted)',18,92,2);
     d.setTextColor(TFT_MAGENTA,0x10A2);d.drawString('RAM:   512 KB SRAM + 8 MB PSRAM',18,114,2);
     d.fillRoundRect(10,148,220,80,6,0x10A2);d.drawRoundRect(10,148,220,80,6,0x05BF);
-    d.setTextColor(TFT_YELLOW,0x10A2);d.drawString('GitHub: Haris16-code/KryonOS',18,156,2);
+    d.setTextColor(TFT_YELLOW,0x10A2);d.drawString('GitHub: -code/KryonOS',18,156,2);
     d.setTextColor(TFT_WHITE,0x10A2);d.drawString('Author: Haris (@Haris16-code)',18,178,2);
     d.setTextColor(TFT_GREEN,0x10A2);d.drawString('License: MIT Open Source',18,200,2);
     d.setTextDatum(4);d.fillRoundRect(40,240,160,32,4,TFT_RED);d.setTextColor(TFT_WHITE,TFT_RED);d.drawString('Reset App Data',120,256,2);
@@ -1390,7 +1390,7 @@ class AppStoreScreen {
   constructor(sim) {
     this.sim = sim;
     this.state = 0; // 0: Categories, 1: App List, 2: App Info, 3: Dialog
-    this.INDEX = 'https://raw.githubusercontent.com/Haris16-code/KryonOS-AppStore/refs/heads/main/index.json';
+    this.INDEX = 'https://raw.githubusercontent.com/shifat100/test_kryon/refs/heads/main/index.json';
     this.cats = [];
     this.apps = [];
     this.catName = '';
