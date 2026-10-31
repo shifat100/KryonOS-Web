@@ -1386,134 +1386,404 @@ class AboutScreen{
   }
 }
 
-class AppStoreScreen{
-  constructor(sim){
-    this.sim=sim;this.state=0;this.INDEX='https://raw.githubusercontent.com/Haris16-code/KryonOS-AppStore/refs/heads/main/index.json';
-    this.cats=[];this.apps=[];this.catName='';this.selCat=0;this.selApp=0;this.scroll=0;this.dialog='';this.loading=false;
+class AppStoreScreen {
+  constructor(sim) {
+    this.sim = sim;
+    this.state = 0; // 0: Categories, 1: App List, 2: App Info, 3: Dialog
+    this.INDEX = 'https://raw.githubusercontent.com/Haris16-code/KryonOS-AppStore/refs/heads/main/index.json';
+    this.cats = [];
+    this.apps = [];
+    this.catName = '';
+    this.selCat = 0;
+    this.selApp = 0;
+    this.scroll = 0;
+    this.dialog = '';
+    this.loading = false;
   }
-  async fetchCats(){
-    this.loading=true;this.dialog='Fetching App Store...';this.draw();
-    try{
-      const res=await fetch(this.INDEX);const data=await res.json();
-      this.cats=[{name:'[ Check For Apps Update ]',url:'UPDATE_ACTION'}];
-      if(data&&data.categories)for(const [name,url] of Object.entries(data.categories))this.cats.push({name,url:String(url)});
-      this.loading=false;this.draw();
-    }catch(e){this.dialog='Store Offline: '+e.message;this.state=3;this.loading=false;this.draw();}
+
+  async fetchCats() {
+    this.loading = true;
+    this.dialog = 'Fetching App Store...';
+    this.draw();
+    try {
+      const res = await fetch(this.INDEX);
+      const data = await res.json();
+      this.cats = [{ name: '[ Check For Apps Update ]', url: 'UPDATE_ACTION' }];
+      if (data && data.categories) {
+        for (const [name, url] of Object.entries(data.categories)) {
+          this.cats.push({ name, url: String(url) });
+        }
+      }
+      this.selCat = 0;
+      this.scroll = 0;
+      this.loading = false;
+      this.draw();
+    } catch (e) {
+      this.dialog = 'Store Offline: ' + e.message;
+      this.state = 3;
+      this.loading = false;
+      this.draw();
+    }
   }
-  async fetchCatApps(url){
-    if(url==='UPDATE_ACTION'){this.dialog='All apps are up to date (emulator).';this.state=3;this.draw();return;}
-    this.loading=true;this.dialog='Loading '+this.catName+'...';this.draw();
-    try{
-      const res=await fetch(url);const data=await res.json();this.apps=[];
-      if(data&&data.apps){
-        for(const [id,info] of Object.entries(data.apps)){
+
+  async fetchCatApps(url) {
+    if (url === 'UPDATE_ACTION') {
+      this.dialog = 'All apps are up to date (emulator).';
+      this.state = 3;
+      this.draw();
+      return;
+    }
+    this.loading = true;
+    this.dialog = 'Loading ' + this.catName + '...';
+    this.draw();
+    try {
+      const res = await fetch(url);
+      const data = await res.json();
+      this.apps = [];
+      if (data && data.apps) {
+        for (const [id, info] of Object.entries(data.apps)) {
           this.apps.push({
-            id,name:id.charAt(0).toUpperCase()+id.slice(1),
-            metaUrl:info.meta,appUrl:info.app,
-            author:'?',version:'1.0.0',description:'Tap to load details'
+            id,
+            name: id.charAt(0).toUpperCase() + id.slice(1),
+            metaUrl: info.meta,
+            appUrl: info.app,
+            author: '?',
+            version: '1.0.0',
+            description: 'Tap to load details'
           });
         }
       }
-      this.state=1;this.selApp=0;this.scroll=0;this.loading=false;this.draw();
-    }catch(e){this.dialog='Failed: '+e.message;this.state=3;this.loading=false;this.draw();}
+      // Sort alphabetically like firmware
+      this.apps.sort((a, b) => a.name.localeCompare(b.name));
+      this.state = 1;
+      this.selApp = 0;
+      this.scroll = 0;
+      this.loading = false;
+      this.draw();
+    } catch (e) {
+      this.dialog = 'Failed: ' + e.message;
+      this.state = 3;
+      this.loading = false;
+      this.draw();
+    }
   }
-  async fetchDetails(app){
-    this.loading=true;this.dialog='Loading details...';this.draw();
-    try{
-      const res=await fetch(app.metaUrl);const meta=await res.json();
-      Object.assign(app,{name:meta.name||app.name,author:meta.author||'Unknown',version:meta.version||'1.0.0',description:meta.description||'No description',packageName:meta.packageName||app.id,permissions:meta.permissions||[],meta});
-    }catch(e){}
-    this.loading=false;this.state=2;this.draw();
-  }
-  async installApp(app){
-    this.loading=true;this.dialog='Downloading '+app.name+'...';this.draw();
-    try{
-      const metaRes=await fetch(app.metaUrl);const metaText=await metaRes.text();const meta=JSON.parse(metaText);
-      const codeRes=await fetch(app.appUrl);const codeText=await codeRes.text();
-      const pkg=meta.packageName||app.id;const dir='/local/apps/'+pkg;
-      this.sim.vfs.mkdir(dir);this.sim.vfs.write(dir+'/app.json',JSON.stringify(meta,null,2));this.sim.vfs.write(dir+'/main.js',codeText);
-      log(`[AppStore] Installed ${meta.name} (${pkg}) v${meta.version}`,'ok');
-      this.dialog=`${meta.name}\nv${meta.version}\n\nInstalled successfully!`;
-      this.state=3;this.sim.launcher.scan();this.sim.refreshAppList();
-    }catch(e){this.dialog='Install error:\n'+e.message;this.state=3;}
-    this.loading=false;this.draw();
-  }
-  draw(){
-    const d=this.sim.disp;
-    d.fillScreen(TFT_BLACK);d.drawRoundRect(3,3,234,314,5,TFT_WHITE);
-    d.fillRoundRect(6,6,228,30,5,TFT_BLACK);d.drawRoundRect(6,6,228,30,5,TFT_GREEN);
-    d.setTextColor(TFT_GREEN,TFT_BLACK);d.setTextDatum(4);
-    let h='App Store';
-    if(this.state===1)h=this.catName;else if(this.state===2)h='App Details';else if(this.state===3)h='Notice';
-    d.drawString(h,120,21,2);d.fillRect(10,45,220,230,TFT_BLACK);
 
-    if(this.loading){d.setTextColor(TFT_YELLOW,TFT_BLACK);d.drawString(this.dialog,120,160,2);return;}
-    if(this.state===0){
-      if(!this.cats.length){this.fetchCats();return;}
-      for(let i=0;i<7;i++){
-        const idx=this.scroll+i;if(idx>=this.cats.length)break;
-        const y=45+i*30;
-        if(idx===this.selCat){
-          d.fillRect(10,y,220,25,TFT_WHITE);d.setTextColor(TFT_BLACK,TFT_WHITE);d.setTextDatum(3);d.drawString('> '+this.cats[idx].name,15,y+12,2);
-        }else{
-          d.setTextColor(TFT_WHITE,TFT_BLACK);d.setTextDatum(3);d.drawString('  '+this.cats[idx].name,15,y+12,2);
+  async fetchDetails(app) {
+    this.loading = true;
+    this.dialog = 'Loading details...';
+    this.draw();
+    try {
+      const res = await fetch(app.metaUrl);
+      const meta = await res.json();
+      Object.assign(app, {
+        name: meta.name || app.name,
+        author: meta.author || 'Unknown',
+        version: meta.version || '1.0.0',
+        description: meta.description || 'No description',
+        packageName: meta.packageName || app.id,
+        permissions: meta.permissions || [],
+        meta
+      });
+    } catch (e) {}
+    this.loading = false;
+    this.state = 2;
+    this.draw();
+  }
+
+  async installApp(app) {
+    this.loading = true;
+    this.dialog = 'Downloading ' + app.name + '...';
+    this.draw();
+    try {
+      const metaRes = await fetch(app.metaUrl);
+      const metaText = await metaRes.text();
+      const meta = JSON.parse(metaText);
+      const codeRes = await fetch(app.appUrl);
+      const codeText = await codeRes.text();
+
+      const pkg = meta.packageName || app.id;
+      const dir = '/local/apps/' + pkg;
+      this.sim.vfs.mkdir(dir);
+      this.sim.vfs.write(dir + '/app.json', JSON.stringify(meta, null, 2));
+      this.sim.vfs.write(dir + '/main.js', codeText);
+
+      log(`[AppStore] Installed ${meta.name} (${pkg}) v${meta.version}`, 'ok');
+      this.dialog = `${meta.name}\nv${meta.version}\n\nInstalled successfully!`;
+      this.state = 3;
+      this.sim.launcher.scan();
+      this.sim.refreshAppList();
+    } catch (e) {
+      this.dialog = 'Install error:\n' + e.message;
+      this.state = 3;
+    }
+    this.loading = false;
+    this.draw();
+  }
+
+  draw() {
+    const d = this.sim.disp;
+    d.fillScreen(TFT_BLACK);
+    d.setTextDatum(0);
+    d.drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
+    d.fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
+    d.drawRoundRect(6, 6, 228, 30, 5, TFT_GREEN);
+    d.setTextColor(TFT_GREEN, TFT_BLACK);
+    d.setTextDatum(4);
+
+    let h = 'App Store';
+    if (this.state === 1) h = this.catName;
+    else if (this.state === 2) h = 'App Details';
+    else if (this.state === 3) h = 'Notice';
+    d.drawString(h, 120, 21, 2);
+    d.fillRect(10, 45, 220, 230, TFT_BLACK);
+
+    if (this.loading) {
+      d.setTextColor(TFT_YELLOW, TFT_BLACK);
+      d.setTextDatum(4);
+      d.drawString(this.dialog, 120, 160, 2);
+      return;
+    }
+
+    const itemsPerPage = 7;
+
+    // STATE 0: Categories List
+    if (this.state === 0) {
+      if (!this.cats.length) {
+        this.fetchCats();
+        return;
+      }
+      
+      // Ensure focus stays visible within the 7-item window
+      if (this.selCat < this.scroll) this.scroll = this.selCat;
+      if (this.selCat >= this.scroll + itemsPerPage) this.scroll = this.selCat - itemsPerPage + 1;
+      this.scroll = Math.max(0, Math.min(this.scroll, Math.max(0, this.cats.length - itemsPerPage)));
+
+      for (let i = 0; i < itemsPerPage; i++) {
+        const idx = this.scroll + i;
+        if (idx >= this.cats.length) break;
+        const y = 45 + i * 30;
+        
+        if (idx === this.selCat) {
+          d.fillRect(10, y, 220, 25, TFT_WHITE);
+          d.setTextColor(TFT_BLACK, TFT_WHITE);
+          d.setTextDatum(3);
+          d.drawString('> ' + this.cats[idx].name, 15, y + 12, 2);
+        } else {
+          d.setTextColor(TFT_WHITE, TFT_BLACK);
+          d.setTextDatum(3);
+          d.drawString('  ' + this.cats[idx].name, 15, y + 12, 2);
         }
       }
+      this._drawScrollbar(this.cats.length, itemsPerPage);
       this._footer();
-    }else if(this.state===1){
-      for(let i=0;i<7;i++){
-        const idx=this.scroll+i;if(idx>=this.apps.length)break;
-        const y=45+i*30;
-        if(idx===this.selApp){
-          d.fillRect(10,y,220,25,TFT_WHITE);d.setTextColor(TFT_BLACK,TFT_WHITE);d.setTextDatum(3);d.drawString('> '+this.apps[idx].name,15,y+12,2);
-        }else{
-          d.setTextColor(TFT_WHITE,TFT_BLACK);d.setTextDatum(3);d.drawString('  '+this.apps[idx].name,15,y+12,2);
+    } 
+    // STATE 1: App List
+    else if (this.state === 1) {
+      if (!this.apps.length) {
+        d.setTextColor(TFT_WHITE, TFT_BLACK);
+        d.setTextDatum(4);
+        d.drawString('No apps found.', 120, 160, 2);
+      } else {
+        // Ensure focus stays visible within the 7-item window
+        if (this.selApp < this.scroll) this.scroll = this.selApp;
+        if (this.selApp >= this.scroll + itemsPerPage) this.scroll = this.selApp - itemsPerPage + 1;
+        this.scroll = Math.max(0, Math.min(this.scroll, Math.max(0, this.apps.length - itemsPerPage)));
+
+        for (let i = 0; i < itemsPerPage; i++) {
+          const idx = this.scroll + i;
+          if (idx >= this.apps.length) break;
+          const y = 45 + i * 30;
+
+          if (idx === this.selApp) {
+            d.fillRect(10, y, 220, 25, TFT_WHITE);
+            d.setTextColor(TFT_BLACK, TFT_WHITE);
+            d.setTextDatum(3);
+            d.drawString('> ' + this.apps[idx].name, 15, y + 12, 2);
+          } else {
+            d.setTextColor(TFT_WHITE, TFT_BLACK);
+            d.setTextDatum(3);
+            d.drawString('  ' + this.apps[idx].name, 15, y + 12, 2);
+          }
         }
+        this._drawScrollbar(this.apps.length, itemsPerPage);
       }
       this._footer();
-    }else if(this.state===2){
-      const a=this.apps[this.selApp];if(!a){this.state=1;this.draw();return;}
-      d.setTextDatum(0);d.setTextColor(TFT_WHITE,TFT_BLACK);
-      d.drawString('Name:    '+a.name,15,55,2);d.drawString('Author:  '+a.author,15,78,2);d.drawString('Version: '+a.version,15,101,2);
-      d.setTextColor(TFT_LIGHTGREY,TFT_BLACK);d.drawString('Desc: '+String(a.description).substring(0,55),15,130,2);
-      d.setTextDatum(4);d.fillRoundRect(25,230,80,30,4,TFT_GREEN);d.setTextColor(TFT_BLACK,TFT_GREEN);d.drawString('INSTALL',65,245,2);
-      d.fillRoundRect(135,230,80,30,4,TFT_RED);d.setTextColor(TFT_WHITE,TFT_RED);d.drawString('CANCEL',175,245,2);
-    }else if(this.state===3){
-      d.fillRoundRect(10,70,220,160,6,TFT_DARKGREY);d.drawRoundRect(10,70,220,160,6,TFT_WHITE);
-      d.setTextColor(TFT_WHITE,TFT_DARKGREY);d.setTextDatum(4);
-      const lines=this.dialog.split('\n');const startY=110-(lines.length-1)*11;
-      for(let i=0;i<lines.length;i++)d.drawString(lines[i],120,startY+i*22,2);
-      d.fillRoundRect(85,195,70,30,4,TFT_BLUE);d.setTextColor(TFT_WHITE,TFT_BLUE);d.drawString('OK',120,210,2);
+    } 
+    // STATE 2: App Details View
+    else if (this.state === 2) {
+      const a = this.apps[this.selApp];
+      if (!a) { this.state = 1; this.draw(); return; }
+
+      d.setTextDatum(0);
+      d.setTextColor(TFT_WHITE, TFT_BLACK);
+      d.drawString('Name:    ' + a.name, 15, 55, 2);
+      d.drawString('Author:  ' + a.author, 15, 78, 2);
+      d.drawString('Version: ' + a.version, 15, 101, 2);
+      d.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+
+      // Multi-line word wrapped description
+      const words = String(a.description || '').split(' ');
+      let line = '', ly = 130;
+      for (const w of words) {
+        if ((line + w).length > 25) {
+          d.drawString(line, 15, ly, 2);
+          ly += 16;
+          line = '';
+          if (ly > 210) break;
+        }
+        line += w + ' ';
+      }
+      if (line && ly <= 210) d.drawString(line, 15, ly, 2);
+
+      d.setTextDatum(4);
+      d.fillRoundRect(25, 230, 80, 30, 4, TFT_GREEN);
+      d.setTextColor(TFT_BLACK, TFT_GREEN);
+      d.drawString('INSTALL', 65, 245, 2);
+
+      d.fillRoundRect(135, 230, 80, 30, 4, TFT_RED);
+      d.setTextColor(TFT_WHITE, TFT_RED);
+      d.drawString('CANCEL', 175, 245, 2);
+    } 
+    // STATE 3: Notice / Dialog
+    else if (this.state === 3) {
+      d.fillRoundRect(10, 70, 220, 160, 6, TFT_DARKGREY);
+      d.drawRoundRect(10, 70, 220, 160, 6, TFT_WHITE);
+      d.setTextColor(TFT_WHITE, TFT_DARKGREY);
+      d.setTextDatum(4);
+
+      const lines = this.dialog.split('\n');
+      const startY = 110 - (lines.length - 1) * 11;
+      for (let i = 0; i < lines.length; i++) {
+        d.drawString(lines[i], 120, startY + i * 22, 2);
+      }
+
+      d.fillRoundRect(85, 195, 70, 30, 4, TFT_BLUE);
+      d.setTextColor(TFT_WHITE, TFT_BLUE);
+      d.drawString('OK', 120, 210, 2);
     }
   }
-  _footer(){
-    const d=this.sim.disp;d.drawRoundRect(5,285,230,30,5,TFT_WHITE);d.setTextColor(TFT_WHITE,TFT_BLACK);d.setTextDatum(4);
-    d.drawString('BACK',35,300,2);d.drawString('|',70,300,2);d.drawString('UP',100,300,2);d.drawString('|',130,300,2);
-    d.drawString('SEL',165,300,2);d.drawString('|',200,300,2);d.drawString('DN',220,300,2);
+
+  _drawScrollbar(total, pp) {
+    if (total <= pp) return;
+    const d = this.sim.disp;
+    const sbH = Math.max(16, Math.floor((230 * pp) / total));
+    const maxOffset = total - pp;
+    const sbY = 45 + Math.floor((this.scroll * (230 - sbH)) / Math.max(1, maxOffset));
+    d.fillRect(231, 45, 3, 230, TFT_DARKGREY);
+    d.fillRect(231, sbY, 3, sbH, TFT_WHITE);
   }
-  handleTouch(x,y){
-    if(this.loading)return;
-    if(this.state===3){if(x>=85&&x<=155&&y>=195&&y<=225){this.state=0;this.draw();}return;}
-    if(this.state===2){
-      if(y>=230&&y<=260){
-        if(x>=25&&x<=105)this.installApp(this.apps[this.selApp]);
-        else if(x>=135&&x<=215){this.state=1;this.draw();}
+
+  _footer() {
+    const d = this.sim.disp;
+    d.drawRoundRect(5, 285, 230, 30, 5, TFT_WHITE);
+    d.setTextColor(TFT_WHITE, TFT_BLACK);
+    d.setTextDatum(4);
+    d.drawString('BACK', 35, 300, 2);
+    d.drawString('|', 70, 300, 2);
+    d.drawString('UP', 100, 300, 2);
+    d.drawString('|', 130, 300, 2);
+    d.drawString('SEL', 165, 300, 2);
+    d.drawString('|', 200, 300, 2);
+    d.drawString('DN', 220, 300, 2);
+  }
+
+  handleTouch(x, y) {
+    if (this.loading) return;
+
+    // Notice Dialog OK
+    if (this.state === 3) {
+      if (x >= 85 && x <= 155 && y >= 195 && y <= 225) {
+        this.state = 0;
+        this.draw();
       }
       return;
     }
-    if(y>=45&&y<=270){
-      const list=this.state===0?this.cats:this.apps;const c=this.scroll+Math.floor((y-45)/30);
-      if(c<list.length){
-        if(this.state===0){this.selCat=c;this.catName=list[c].name;this.fetchCatApps(list[c].url);}
-        else{this.selApp=c;this.fetchDetails(list[c]);}
+
+    // App Details actions
+    if (this.state === 2) {
+      if (y >= 230 && y <= 260) {
+        if (x >= 25 && x <= 105) this.installApp(this.apps[this.selApp]);
+        else if (x >= 135 && x <= 215) {
+          this.state = 1;
+          this.draw();
+        }
       }
       return;
     }
-    if(y>=285){
-      if(x<70){if(this.state===1){this.state=0;this.draw();}else this.sim.setState(S.LAUNCHER);}
-      else if(x>=70&&x<130){if(this.state===0&&this.selCat>0){this.selCat--;this.draw();}else if(this.state===1&&this.selApp>0){this.selApp--;this.draw();}}
-      else if(x>=130&&x<200){if(this.state===0){this.catName=this.cats[this.selCat].name;this.fetchCatApps(this.cats[this.selCat].url);}else if(this.state===1)this.fetchDetails(this.apps[this.selApp]);}
-      else if(x>=200){if(this.state===0&&this.selCat<this.cats.length-1){this.selCat++;this.draw();}else if(this.state===1&&this.selApp<this.apps.length-1){this.selApp++;this.draw();}}
+
+    const itemsPerPage = 7;
+
+    // List item tapped (Y: 45 to 255)
+    if (y >= 45 && y <= 255) {
+      const clickedRow = Math.floor((y - 45) / 30);
+      const clickedIdx = this.scroll + clickedRow;
+
+      if (this.state === 0) {
+        if (clickedIdx < this.cats.length) {
+          this.selCat = clickedIdx;
+          this.catName = this.cats[clickedIdx].name;
+          this.draw();
+          this.fetchCatApps(this.cats[clickedIdx].url);
+        }
+      } else if (this.state === 1) {
+        if (clickedIdx < this.apps.length) {
+          this.selApp = clickedIdx;
+          this.draw();
+          this.fetchDetails(this.apps[clickedIdx]);
+        }
+      }
+      return;
+    }
+
+    // Footer Navigation (Y >= 285)
+    if (y >= 285) {
+      // BACK button
+      if (x < 70) {
+        if (this.state === 1) {
+          this.state = 0;
+          this.scroll = 0;
+          this.draw();
+        } else {
+          this.sim.setState(S.LAUNCHER);
+        }
+      }
+      // UP button
+      else if (x >= 70 && x < 130) {
+        if (this.state === 0 && this.selCat > 0) {
+          this.selCat--;
+          if (this.selCat < this.scroll) this.scroll = this.selCat;
+          this.draw();
+        } else if (this.state === 1 && this.selApp > 0) {
+          this.selApp--;
+          if (this.selApp < this.scroll) this.scroll = this.selApp;
+          this.draw();
+        }
+      }
+      // SEL button
+      else if (x >= 130 && x < 200) {
+        if (this.state === 0 && this.selCat < this.cats.length) {
+          this.catName = this.cats[this.selCat].name;
+          this.fetchCatApps(this.cats[this.selCat].url);
+        } else if (this.state === 1 && this.selApp < this.apps.length) {
+          this.fetchDetails(this.apps[this.selApp]);
+        }
+      }
+      // DN button
+      else if (x >= 200) {
+        if (this.state === 0 && this.selCat < this.cats.length - 1) {
+          this.selCat++;
+          if (this.selCat >= this.scroll + itemsPerPage) {
+            this.scroll = this.selCat - itemsPerPage + 1;
+          }
+          this.draw();
+        } else if (this.state === 1 && this.selApp < this.apps.length - 1) {
+          this.selApp++;
+          if (this.selApp >= this.scroll + itemsPerPage) {
+            this.scroll = this.selApp - itemsPerPage + 1;
+          }
+          this.draw();
+        }
+      }
     }
   }
 }
