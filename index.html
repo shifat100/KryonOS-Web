@@ -46,6 +46,10 @@ textarea.code-editor{width:100%;height:280px;background:#07070f;color:#7ee787;bo
 #console{background:#05050c;color:#6ee7b7;font-family:'Menlo',monospace;font-size:11px;padding:10px;border-radius:8px;height:200px;overflow-y:auto;border:1px solid var(--border);line-height:1.5}
 .app-row{display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:var(--panel2);border:1px solid var(--border);border-radius:6px;font-size:11px}
 .app-row strong{color:var(--accent2)}.app-row .actions{display:flex;gap:6px}
+  .runtime-notice{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;background:rgba(0,180,255,.08);border:1px solid rgba(0,180,255,.35);border-radius:8px;font-size:11px;line-height:1.4;color:var(--text)}
+.runtime-notice strong{color:var(--accent2)}
+.runtime-notice a{background:linear-gradient(180deg,var(--accent2),#0084c7);color:#000;text-decoration:none;padding:5px 10px;border-radius:6px;font-weight:700;font-size:10px;white-space:nowrap;box-shadow:0 2px 0 #005885}
+.runtime-notice a:hover{filter:brightness(1.1)}
 </style>
 </head>
 <body>
@@ -152,6 +156,10 @@ textarea.code-editor{width:100%;height:280px;background:#07070f;color:#7ee787;bo
     <div class="row"><button class="btn sec" id="btn-clear-log">Clear</button></div>
   </div>
 </div>
+  <div class="runtime-notice">
+    <span><strong>Notice:</strong> A fully compatible KryonOS Runtime WebApp is available online.</span>
+    <a href="https://shifat100.github.io/KryonOS-Web/runtime/" target="_blank" rel="noopener noreferrer">Open Runtime ↗</a>
+  </div>
 <script src="emulator.js"></script>
 </body>
 </html>
