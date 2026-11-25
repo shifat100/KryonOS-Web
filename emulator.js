@@ -738,6 +738,50 @@ function shieldTokens(src){
 }
 function restoreTokens(code,tokens){return code.replace(/\x00([SC])(\d+)\x00/g,(m,t,idx)=>tokens[parseInt(idx,10)]);}
 
+function awaitIIFEs(code){
+  let out='',i=0;
+  const re=/\basync\s+function\s*(?:[A-Za-z_$][\w$]*)?\s*\(/g;
+  let m;
+  while((m=re.exec(code))!==null){
+    const start=m.index;
+    let p=start-1;
+    while(p>=0&&/\s/.test(code[p]))p--;
+    if(p<0||code[p]!=='(')continue;
+    let idx=re.lastIndex-1,depth=0;
+    while(idx<code.length){
+      if(code[idx]==='(')depth++;
+      else if(code[idx]===')'){depth--;if(depth===0){idx++;break;}}
+      idx++;
+    }
+    while(idx<code.length&&/\s/.test(code[idx]))idx++;
+    if(code[idx]!=='{')continue;
+    let bdepth=0;
+    while(idx<code.length){
+      if(code[idx]==='{')bdepth++;
+      else if(code[idx]==='}'){bdepth--;if(bdepth===0){idx++;break;}}
+      idx++;
+    }
+    let after=idx;
+    while(after<code.length&&/\s/.test(code[after]))after++;
+    let isIIFE=false;
+    if(code[after]==='('){
+      isIIFE=true;
+    }else if(code[after]===')'){
+      let ap=after+1;
+      while(ap<code.length&&/\s/.test(code[ap]))ap++;
+      if(code[ap]==='(')isIIFE=true;
+    }
+    if(isIIFE){
+      const beforeParen=code.substring(0,p);
+      if(!/\bawait\s*$/.test(beforeParen)){
+        out+=code.substring(i,p)+'await ';
+        i=p;
+      }
+    }
+  }
+  return out+code.substring(i);
+}
+
 function transpile(src){
   if(/\basync\s+function\b/.test(src)||/\basync\s*\(/.test(src)||/\basync\s+[A-Za-z_$][\w$]*\s*=>/.test(src)||/(^|[^\w$])await\s/.test(src)||/\bnew\s+Promise\b/.test(src)){
     throw new Error('Duktape 2.7 runtime: async/await/Promise not supported. Use System.delay() instead.');
@@ -756,6 +800,8 @@ function transpile(src){
   const declared=new Set();
   const dr=/\basync\s+function\s+([A-Za-z_$][\w$]*)\s*\(/g;
   let m;while((m=dr.exec(code))!==null)declared.add(m[1]);
+  const drExpr=/\b(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=\s*async\s+function\b/g;
+  while((m=drExpr.exec(code))!==null)declared.add(m[1]);
   code=code.replace(/(^|[^.\w$])((?:System\s*\.\s*(?:delay|delayMicroseconds|prompt|pickFile|pickDir)|FS\s*\.\s*(?:pick|pickFile|pickDir|pickFolder)|Network\s*\.\s*(?:get|post|put|delete|request|downloadFile)|(?:Kryon\s*\.\s*ai|AI|System\s*\.\s*ai)\s*\.\s*(?:ask|stream|extract|vision)))\s*\(/g,'$1await $2(');
   for(const fn of declared){
     const re=new RegExp(`(^|[^\\w$.])(${escapeRegex(fn)})\\s*\\(`,'g');
@@ -767,6 +813,7 @@ function transpile(src){
       return pre+'await '+name+'(';
     });
   }
+  code=awaitIIFEs(code);
   return restoreTokens(code,tokens);
 }
 
@@ -1932,12 +1979,17 @@ function buildSystem(sim,disp,keyboard,picker,notif,pwm,i2c,crypto,ipc,ai,net,ht
     getTouch:pushTouch,
     millis:()=>Date.now()-startTime,
     micros:()=>(Date.now()-startTime)*1000,
-    delay:async ms=>{
+   delay:async ms=>{
       const cap=clamp(ms|0,0,30000);
+      if(cap===0){
+        if(sim.exitRequested)throw Object.assign(new Error('OS_EXIT'),{code:'OS_EXIT'});
+        ipc._dispatch();
+        return;
+      }
       const s=Date.now();
       while(Date.now()-s<cap){
         if(sim.exitRequested)throw Object.assign(new Error('OS_EXIT'),{code:'OS_EXIT'});
-        await sleep(10);
+        await sleep(Math.min(10,Math.max(1,cap-(Date.now()-s))));
         ipc._dispatch();
         if(sim.env.GPS)sim.env.GPS._tick();
         if(sim.env.Bluetooth)sim.env.Bluetooth.poll();
