@@ -6,22 +6,26 @@
   <title>KryonOS Web Simulator</title>
   <style>
     :root {
-      --bg: #f4f6f9;
+      --bg: #eef2f7;
       --surface: #ffffff;
       --surface-alt: #f8fafc;
+      --surface-soft: #f1f5f9;
       --border: #e2e8f0;
       --border-strong: #cbd5e1;
       --text: #0f172a;
       --text-muted: #64748b;
       --primary: #2563eb;
       --primary-hover: #1d4ed8;
+      --primary-soft: #eff6ff;
+      --accent: #0ea5e9;
       --danger: #dc2626;
       --danger-bg: #fef2f2;
       --success: #16a34a;
       --success-bg: #f0fdf4;
-      --warn: #d97706;
-      --radius: 10px;
-      --shadow: 0 1px 3px rgba(15, 23, 42, 0.06), 0 4px 14px rgba(15, 23, 42, 0.04);
+      --warn: #f59e0b;
+      --radius: 12px;
+      --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+      --shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.07), 0 1px 3px rgba(15, 23, 42, 0.04);
       --mono: "JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, monospace;
       --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
@@ -35,7 +39,10 @@
       margin: 0;
       padding: 0;
       height: 100%;
-      background: var(--bg);
+      background:
+        radial-gradient(circle at 12% 0%, rgba(37, 99, 235, 0.08), transparent 36%),
+        radial-gradient(circle at 88% 100%, rgba(14, 165, 233, 0.08), transparent 36%),
+        var(--bg);
       color: var(--text);
       font-family: var(--sans);
       overflow: hidden;
@@ -49,9 +56,12 @@
       height: 100dvh;
     }
 
+    /* Topbar */
     .topbar {
-      min-height: 54px;
-      background: var(--surface);
+      min-height: 58px;
+      background: rgba(255, 255, 255, 0.88);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
       border-bottom: 1px solid var(--border);
       padding: 8px 18px;
       display: flex;
@@ -59,59 +69,61 @@
       justify-content: space-between;
       gap: 12px;
       flex-shrink: 0;
+      z-index: 20;
     }
 
     .brand {
       display: flex;
       align-items: center;
-      gap: 10px;
-      min-width: 0;
-    }
-
-    .brand-text {
-      display: flex;
-      align-items: baseline;
-      flex-wrap: wrap;
-      gap: 4px;
+      gap: 11px;
       min-width: 0;
     }
 
     .logo {
-      width: 30px;
-      height: 30px;
-      border-radius: 8px;
-      background: linear-gradient(135deg, #2563eb, #0ea5e9);
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #2563eb 0%, #0ea5e9 100%);
       color: #fff;
-      font-weight: 700;
-      font-size: 14px;
+      font-weight: 800;
+      font-size: 16px;
       display: grid;
       place-items: center;
       letter-spacing: -0.5px;
       flex-shrink: 0;
+      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+    }
+
+    .brand-text {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
     }
 
     .brand-title {
-      font-weight: 600;
-      font-size: 15px;
-      letter-spacing: -0.2px;
+      font-weight: 700;
+      font-size: 14.5px;
+      letter-spacing: -0.25px;
       white-space: nowrap;
+      line-height: 1.2;
     }
 
     .brand-sub {
-      font-size: 12px;
+      font-size: 11px;
       color: var(--text-muted);
       white-space: nowrap;
+      font-weight: 500;
     }
 
     .status-pill {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
-      padding: 4px 10px;
+      gap: 7px;
+      padding: 5px 11px;
       border-radius: 999px;
       font-size: 12px;
-      font-weight: 500;
-      background: var(--surface-alt);
+      font-weight: 600;
+      background: var(--surface-soft);
       border: 1px solid var(--border);
       color: var(--text-muted);
       max-width: 240px;
@@ -119,6 +131,7 @@
       overflow: hidden;
       text-overflow: ellipsis;
       flex-shrink: 0;
+      transition: all 0.2s ease;
     }
 
     .status-dot {
@@ -127,10 +140,19 @@
       border-radius: 50%;
       background: var(--warn);
       flex-shrink: 0;
+      animation: pulseDot 1.4s infinite ease-in-out;
+    }
+
+    .status-pill.ready {
+      background: var(--success-bg);
+      color: #15803d;
+      border-color: #bbf7d0;
     }
 
     .status-pill.ready .status-dot {
       background: var(--success);
+      animation: none;
+      box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.18);
     }
 
     .status-pill.error {
@@ -141,6 +163,12 @@
 
     .status-pill.error .status-dot {
       background: var(--danger);
+      animation: none;
+    }
+
+    @keyframes pulseDot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.45; transform: scale(0.85); }
     }
 
     .toolbar-actions {
@@ -150,37 +178,55 @@
       flex-wrap: wrap;
     }
 
+    .btn-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
     button, select {
       font-family: var(--sans);
       font-size: 13px;
-      border-radius: 7px;
+      border-radius: 8px;
       outline: 0;
     }
 
     .select-input {
-      height: 34px;
-      padding: 0 10px;
-      border: 1px solid var(--border-strong);
-      background: var(--surface);
-      color: var(--text);
-      cursor: pointer;
-      max-width: 100%;
-    }
-
-    .btn {
-      height: 34px;
-      padding: 0 13px;
+      height: 36px;
+      padding: 0 12px;
       border: 1px solid var(--border-strong);
       background: var(--surface);
       color: var(--text);
       font-weight: 500;
+      cursor: pointer;
+      max-width: 100%;
+      box-shadow: var(--shadow-sm);
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+
+    .select-input:hover, .select-input:focus {
+      border-color: var(--primary);
+    }
+
+    .btn {
+      height: 36px;
+      padding: 0 12px;
+      border: 1px solid var(--border-strong);
+      background: var(--surface);
+      color: var(--text);
+      font-weight: 600;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       gap: 6px;
       white-space: nowrap;
-      transition: background 0.15s, border-color 0.15s, transform 50ms;
+      box-shadow: var(--shadow-sm);
+      transition: background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 60ms;
+    }
+
+    .btn svg {
+      flex-shrink: 0;
     }
 
     .btn:hover:not(:disabled) {
@@ -193,19 +239,21 @@
     }
 
     .btn:disabled {
-      opacity: 0.5;
+      opacity: 0.48;
       cursor: not-allowed;
+      box-shadow: none;
     }
 
     .btn-primary {
-      background: var(--primary);
-      border-color: var(--primary);
+      background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
+      border-color: #1d4ed8;
       color: #fff;
+      box-shadow: 0 2px 8px rgba(37, 99, 235, 0.28);
     }
 
     .btn-primary:hover:not(:disabled) {
-      background: var(--primary-hover);
-      border-color: var(--primary-hover);
+      background: linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%);
+      border-color: #1e40af;
     }
 
     .btn-danger {
@@ -219,49 +267,49 @@
       border-color: #fca5a5;
     }
 
-    .btn-ghost {
-      color: var(--primary);
-      border-color: #bfdbfe;
-      background: #eff6ff;
-    }
-
-    .btn-ghost:hover:not(:disabled) {
-      background: #dbeafe;
-      border-color: #93c5fd;
-    }
-
-    /* Mobile navigation tabs (hidden on desktop) */
+    /* Segmented Mobile Tabs */
     .mobile-tabs {
       display: none;
       background: var(--surface);
       border-bottom: 1px solid var(--border);
-      padding: 6px 12px;
-      gap: 8px;
+      padding: 8px 12px;
       flex-shrink: 0;
+    }
+
+    .mobile-tabs-inner {
+      display: flex;
+      width: 100%;
+      background: var(--surface-soft);
+      padding: 3px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      gap: 4px;
     }
 
     .mobile-tab {
       flex: 1;
-      height: 36px;
-      border: 1px solid var(--border);
-      background: var(--surface-alt);
+      height: 34px;
+      border: none;
+      background: transparent;
       color: var(--text-muted);
       font-weight: 600;
       font-size: 13px;
-      border-radius: 8px;
+      border-radius: 7px;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       gap: 6px;
+      transition: all 0.18s ease;
     }
 
     .mobile-tab.active {
-      background: var(--primary);
-      border-color: var(--primary);
-      color: #fff;
+      background: var(--surface);
+      color: var(--primary);
+      box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
     }
 
+    /* Main Workspace */
     .workspace {
       flex: 1;
       min-height: 0;
@@ -280,10 +328,16 @@
       flex-direction: column;
       min-height: 0;
       overflow: hidden;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .editor-card:focus-within {
+      border-color: #93c5fd;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.08), var(--shadow);
     }
 
     .card-header {
-      min-height: 42px;
+      min-height: 44px;
       padding: 6px 14px;
       background: var(--surface-alt);
       border-bottom: 1px solid var(--border);
@@ -297,26 +351,42 @@
 
     .card-title {
       font-size: 12.5px;
-      font-weight: 600;
+      font-weight: 700;
       color: var(--text);
       display: flex;
       align-items: center;
       gap: 8px;
+      letter-spacing: -0.1px;
     }
 
     .file-tab {
-      background: var(--surface);
-      border: 1px solid var(--border);
+      background: var(--primary-soft);
+      border: 1px solid #bfdbfe;
       padding: 3px 10px;
       border-radius: 6px;
       font-family: var(--mono);
-      font-size: 12px;
+      font-size: 11.5px;
+      font-weight: 600;
       color: var(--primary);
     }
 
     .hint-text {
       font-size: 11.5px;
       color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .kbd {
+      font-family: var(--mono);
+      font-size: 10.5px;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-bottom-width: 2px;
+      border-radius: 4px;
+      padding: 1px 5px;
+      color: var(--text);
     }
 
     .editor-wrap {
@@ -328,14 +398,14 @@
     }
 
     .gutter {
-      width: 46px;
-      padding: 14px 8px 14px 0;
+      width: 48px;
+      padding: 14px 10px 14px 0;
       background: var(--surface-alt);
       border-right: 1px solid var(--border);
       color: #94a3b8;
       font-family: var(--mono);
       font-size: 13px;
-      line-height: 1.55;
+      line-height: 1.6;
       text-align: right;
       user-select: none;
       overflow: hidden;
@@ -352,7 +422,7 @@
       padding: 14px;
       font-family: var(--mono);
       font-size: 13px;
-      line-height: 1.55;
+      line-height: 1.6;
       color: #0f172a;
       background: #fff;
       tab-size: 2;
@@ -363,16 +433,16 @@
 
     .right-col {
       display: grid;
-      grid-template-rows: 1.45fr 0.75fr;
+      grid-template-rows: 1.48fr 0.72fr;
       gap: 14px;
       min-height: 0;
     }
 
     .preset-group {
       display: inline-flex;
-      background: var(--bg);
-      padding: 2px;
-      border-radius: 7px;
+      background: var(--surface-soft);
+      padding: 3px;
+      border-radius: 8px;
       border: 1px solid var(--border);
       gap: 2px;
       flex-wrap: wrap;
@@ -383,43 +453,80 @@
       background: transparent;
       color: var(--text-muted);
       font-size: 11.5px;
-      font-weight: 500;
-      padding: 4px 8px;
-      border-radius: 5px;
+      font-weight: 600;
+      padding: 4px 9px;
+      border-radius: 6px;
       cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .preset-btn:hover:not(.active) {
+      color: var(--text);
     }
 
     .preset-btn.active {
       background: var(--surface);
       color: var(--primary);
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
     }
 
+    /* Engineering Workbench + Sleek Hardware Bezel */
     .device-stage {
       flex: 1;
       min-height: 0;
-      background: #f1f5f9;
+      background-color: #f1f5f9;
+      background-image: radial-gradient(#cbd5e1 1px, transparent 1px);
+      background-size: 18px 18px;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      padding: 12px;
-      gap: 8px;
+      padding: 14px;
+      gap: 10px;
     }
 
     .device-bezel {
-      background: #fff;
-      border: 1px solid var(--border-strong);
-      border-radius: 14px;
-      padding: 10px;
-      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+      background: linear-gradient(155deg, #1e293b 0%, #0f172a 100%);
+      border: 1px solid #334155;
+      border-radius: 16px;
+      padding: 12px;
+      box-shadow:
+        0 18px 36px -12px rgba(15, 23, 42, 0.4),
+        0 4px 10px rgba(15, 23, 42, 0.16),
+        inset 0 1px 0 rgba(255, 255, 255, 0.12);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      max-width: 100%;
+      max-height: calc(100% - 30px);
+      min-height: 0;
+      min-width: 0;
+    }
+
+    .bezel-top {
       display: flex;
       align-items: center;
       justify-content: center;
-      max-width: 100%;
-      max-height: calc(100% - 28px);
-      min-height: 0;
-      min-width: 0;
+      gap: 6px;
+      width: 100%;
+      flex-shrink: 0;
+    }
+
+    .bezel-speaker {
+      width: 34px;
+      height: 4px;
+      border-radius: 999px;
+      background: #334155;
+    }
+
+    .bezel-led {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #0ea5e9;
+      box-shadow: 0 0 8px rgba(14, 165, 233, 0.8);
     }
 
     #canvas {
@@ -427,18 +534,19 @@
       width: auto;
       height: auto;
       max-width: 100%;
-      max-height: 100%;
-      border-radius: 6px;
+      max-height: calc(100% - 14px);
+      border-radius: 7px;
       background: #000;
       outline: 0;
       cursor: crosshair;
       touch-action: none;
       user-select: none;
       -webkit-user-select: none;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
     }
 
     #canvas:focus {
-      box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.35);
+      box-shadow: 0 0 0 2px #3b82f6;
     }
 
     .device-footer {
@@ -450,17 +558,69 @@
       flex-wrap: wrap;
       font-size: 11.5px;
       color: var(--text-muted);
-      padding: 0 4px;
+      padding: 0 2px;
     }
 
     .touch-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
       font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 600;
       background: var(--surface);
       border: 1px solid var(--border);
-      padding: 2px 8px;
-      border-radius: 5px;
+      padding: 3px 9px;
+      border-radius: 999px;
       color: var(--text);
       margin-left: auto;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .touch-badge::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #94a3b8;
+      transition: background 0.1s, box-shadow 0.1s;
+    }
+
+    .touch-badge.active {
+      border-color: #93c5fd;
+      color: var(--primary);
+      background: var(--primary-soft);
+    }
+
+    .touch-badge.active::before {
+      background: var(--primary);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+    }
+
+    /* Dark Sleek Console Output */
+    .console-card {
+      background: #0b1120;
+      border-color: #1e293b;
+    }
+
+    .console-card .card-header {
+      background: #111827;
+      border-bottom-color: #1e293b;
+    }
+
+    .console-card .card-title {
+      color: #e2e8f0;
+    }
+
+    .console-card .btn-xs {
+      background: #1e293b;
+      border-color: #334155;
+      color: #cbd5e1;
+    }
+
+    .console-card .btn-xs:hover:not(:disabled) {
+      background: #334155;
+      color: #fff;
     }
 
     .console-body {
@@ -471,37 +631,37 @@
       padding: 10px 14px;
       font-family: var(--mono);
       font-size: 12px;
-      line-height: 1.5;
-      background: #fff;
+      line-height: 1.55;
+      background: #0b1120;
     }
 
     .log-line {
-      padding: 2px 0;
-      border-bottom: 1px dashed #f1f5f9;
+      padding: 3px 0;
+      border-bottom: 1px dashed rgba(148, 163, 184, 0.12);
       word-break: break-word;
-      color: #334155;
+      color: #cbd5e1;
     }
 
     .log-line.err {
-      color: var(--danger);
+      color: #f87171;
       font-weight: 500;
     }
 
     .log-line.warn {
-      color: var(--warn);
+      color: #fbbf24;
     }
 
     .log-line.notify {
-      color: var(--primary);
+      color: #38bdf8;
     }
 
     .btn-xs {
-      height: 26px;
+      height: 27px;
       padding: 0 10px;
       font-size: 11.5px;
     }
 
-    /* First-Time Tour System */
+    /* Detailed First-Time Tour Overlay */
     .tour-backdrop {
       position: fixed;
       inset: 0;
@@ -519,9 +679,9 @@
       z-index: 9999;
       display: none;
       pointer-events: none;
-      border-radius: 10px;
-      box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.56), 0 0 0 3px #3b82f6;
-      transition: top 0.24s ease, left 0.24s ease, width 0.24s ease, height 0.24s ease;
+      border-radius: 12px;
+      box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.62), 0 0 0 3px #3b82f6, 0 0 24px rgba(59, 130, 246, 0.55);
+      transition: top 0.28s cubic-bezier(0.22, 1, 0.36, 1), left 0.28s cubic-bezier(0.22, 1, 0.36, 1), width 0.28s cubic-bezier(0.22, 1, 0.36, 1), height 0.28s cubic-bezier(0.22, 1, 0.36, 1);
     }
 
     .tour-spotlight.active {
@@ -532,19 +692,38 @@
       position: fixed;
       z-index: 10000;
       display: none;
-      width: 340px;
+      width: 375px;
       max-width: calc(100vw - 24px);
+      max-height: calc(100dvh - 24px);
+      overflow-y: auto;
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 16px;
-      box-shadow: 0 20px 45px rgba(15, 23, 42, 0.24);
+      border-radius: 14px;
+      box-shadow: 0 24px 54px -8px rgba(15, 23, 42, 0.32), 0 0 0 1px rgba(255, 255, 255, 0.7);
       color: var(--text);
-      transition: top 0.24s ease, left 0.24s ease;
+      transition: top 0.28s cubic-bezier(0.22, 1, 0.36, 1), left 0.28s cubic-bezier(0.22, 1, 0.36, 1);
     }
 
     .tour-tooltip.active {
       display: block;
+    }
+
+    .tour-progress-track {
+      height: 4px;
+      width: 100%;
+      background: var(--surface-soft);
+      overflow: hidden;
+    }
+
+    .tour-progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #2563eb, #0ea5e9);
+      width: 12.5%;
+      transition: width 0.28s ease;
+    }
+
+    .tour-body {
+      padding: 15px 16px 14px;
     }
 
     .tour-head {
@@ -559,54 +738,75 @@
       font-size: 11px;
       font-weight: 700;
       color: var(--primary);
-      background: #eff6ff;
+      background: var(--primary-soft);
       border: 1px solid #bfdbfe;
-      padding: 2px 8px;
+      padding: 3px 9px;
       border-radius: 999px;
-      letter-spacing: 0.2px;
+      letter-spacing: 0.15px;
     }
 
     .tour-close {
       border: none;
       background: transparent;
       color: var(--text-muted);
-      font-size: 18px;
+      font-size: 20px;
       line-height: 1;
       width: 28px;
       height: 28px;
-      border-radius: 6px;
+      border-radius: 7px;
       cursor: pointer;
       display: grid;
       place-items: center;
     }
 
     .tour-close:hover {
-      background: var(--surface-alt);
+      background: var(--surface-soft);
       color: var(--text);
     }
 
     .tour-title {
-      font-size: 15px;
+      font-size: 15.5px;
       font-weight: 700;
       margin: 0 0 6px;
       color: var(--text);
+      letter-spacing: -0.2px;
     }
 
     .tour-desc {
       font-size: 13px;
-      line-height: 1.5;
+      line-height: 1.55;
       color: #475569;
-      margin: 0 0 14px;
+      margin: 0 0 12px;
+    }
+
+    .tour-desc ul {
+      margin: 8px 0 0;
+      padding-left: 16px;
+    }
+
+    .tour-desc li {
+      margin-bottom: 4px;
     }
 
     .tour-desc code {
       font-family: var(--mono);
-      font-size: 12px;
-      background: var(--surface-alt);
+      font-size: 11.5px;
+      background: var(--surface-soft);
       border: 1px solid var(--border);
       padding: 1px 5px;
-      border-radius: 4px;
+      border-radius: 5px;
       color: var(--primary);
+      font-weight: 600;
+    }
+
+    .tour-tip {
+      background: #f8fafc;
+      border-left: 3px solid var(--accent);
+      padding: 7px 10px;
+      border-radius: 0 6px 6px 0;
+      font-size: 12px;
+      color: #334155;
+      margin-bottom: 14px;
     }
 
     .tour-footer {
@@ -614,31 +814,36 @@
       align-items: center;
       justify-content: space-between;
       gap: 8px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
     }
 
     .tour-dots {
       display: flex;
       align-items: center;
       gap: 5px;
+      flex-wrap: wrap;
     }
 
     .tour-dot {
-      width: 7px;
-      height: 7px;
+      width: 6px;
+      height: 6px;
       border-radius: 50%;
       background: var(--border-strong);
-      transition: background 0.2s, transform 0.2s;
+      transition: all 0.2s ease;
     }
 
     .tour-dot.active {
+      width: 16px;
+      border-radius: 999px;
       background: var(--primary);
-      transform: scale(1.2);
     }
 
     .tour-actions {
       display: flex;
       align-items: center;
       gap: 6px;
+      flex-shrink: 0;
     }
 
     /* Tablet & Android Phone Layout */
@@ -656,7 +861,7 @@
 
       .status-pill {
         margin-left: auto;
-        max-width: 150px;
+        max-width: 155px;
       }
 
       .toolbar-actions {
@@ -665,7 +870,7 @@
       }
 
       .select-input {
-        flex: 1 1 160px;
+        flex: 1 1 150px;
         height: 36px;
       }
 
@@ -707,16 +912,16 @@
 
       .device-card {
         flex: 1.5 1 320px;
-        min-height: 290px;
+        min-height: 295px;
       }
 
       .console-card {
-        flex: 1 1 160px;
-        min-height: 150px;
+        flex: 1 1 165px;
+        min-height: 155px;
       }
     }
 
-    /* Compact Phone Adjustments */
+    /* Compact Android Phone Adjustments */
     @media (max-width: 600px) {
       .brand-sub {
         display: none;
@@ -726,12 +931,16 @@
         display: none;
       }
 
-      .toolbar-actions .btn {
+      .btn-group {
         flex: 1 1 auto;
       }
 
+      .btn-group .btn {
+        flex: 1;
+      }
+
       #runBtn {
-        flex: 1.4 1 auto;
+        flex: 1.35;
       }
 
       .gutter {
@@ -751,8 +960,9 @@
       }
 
       .device-bezel {
-        padding: 6px;
-        border-radius: 10px;
+        padding: 8px;
+        border-radius: 12px;
+        gap: 5px;
       }
 
       .preset-group {
@@ -773,12 +983,11 @@
       .touch-badge {
         margin-left: 0;
         width: 100%;
-        text-align: center;
+        justify-content: center;
       }
 
       .tour-tooltip {
         width: calc(100vw - 24px);
-        padding: 14px;
       }
     }
   </style>
@@ -786,11 +995,11 @@
 <body>
   <div class="app">
     <header class="topbar">
-      <div class="brand">
+      <div class="brand" id="brandGroup">
         <div class="logo">K</div>
         <div class="brand-text">
           <span class="brand-title">KryonOS Web Simulator</span>
-          <span class="brand-sub">Duktape 2.7 + SDL2 WASM</span>
+          <span class="brand-sub">Duktape 2.7 • SDL2 WASM Studio</span>
         </div>
         <div class="status-pill" id="statusPill">
           <span class="status-dot"></span>
@@ -804,19 +1013,48 @@
           <option value="paint">Sample: 2D Paint &amp; Sprites</option>
           <option value="fs_crypto">Sample: FS &amp; Crypto</option>
         </select>
+
         <input accept=".js" hidden id="fileInput" type="file">
-        <button class="btn" id="openBtn" title="Open local .js file" type="button">Open .js</button>
-        <button class="btn" id="downloadBtn" title="Download current main.js" type="button">Save .js</button>
-        <button class="btn" id="reloadBtn" title="Restart current app" type="button" disabled>Reload</button>
-        <button class="btn btn-danger" id="stopBtn" title="Stop running loop" type="button" disabled>Stop</button>
-        <button class="btn btn-primary" id="runBtn" title="Ctrl + Enter" type="button" disabled>▶ Run</button>
-        <button class="btn btn-ghost" id="tourBtn" title="Start Interactive Tour" type="button">? Tour</button>
+
+        <div class="btn-group" id="fileGroup">
+          <button class="btn" id="openBtn" title="Open local .js file" type="button">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            <span>Open</span>
+          </button>
+          <button class="btn" id="downloadBtn" title="Download current main.js" type="button">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <span>Save</span>
+          </button>
+        </div>
+
+        <div class="btn-group" id="runGroup">
+          <button class="btn" id="reloadBtn" title="Restart current app" type="button" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            <span>Reload</span>
+          </button>
+          <button class="btn btn-danger" id="stopBtn" title="Stop running loop" type="button" disabled>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+            <span>Stop</span>
+          </button>
+          <button class="btn btn-primary" id="runBtn" title="Ctrl + Enter" type="button" disabled>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+            <span>Run</span>
+          </button>
+        </div>
       </div>
     </header>
 
     <nav class="mobile-tabs" aria-label="Workspace View">
-      <button class="mobile-tab active" data-tab="simulator" type="button">Simulator</button>
-      <button class="mobile-tab" data-tab="editor" type="button">Code Editor</button>
+      <div class="mobile-tabs-inner">
+        <button class="mobile-tab active" data-tab="simulator" type="button">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+          <span>Simulator</span>
+        </button>
+        <button class="mobile-tab" data-tab="editor" type="button">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          <span>Code Editor</span>
+        </button>
+      </div>
     </nav>
 
     <main class="workspace" id="workspace" data-mobile-tab="simulator">
@@ -826,7 +1064,11 @@
             <span>Editor</span>
             <span class="file-tab">main.js</span>
           </div>
-          <span class="hint-text">Ctrl+Enter: Run &nbsp;|&nbsp; Tab: Indent</span>
+          <span class="hint-text">
+            <span class="kbd">Ctrl</span>+<span class="kbd">Enter</span> Run
+            &nbsp;•&nbsp;
+            <span class="kbd">Tab</span> Indent
+          </span>
         </div>
         <div class="editor-wrap">
           <div class="gutter" id="gutter">1</div>
@@ -845,18 +1087,22 @@
         <section class="card device-card" id="deviceCard">
           <div class="card-header">
             <div class="card-title">Virtual Device</div>
-            <div class="preset-group">
+            <div class="preset-group" id="presetGroup">
               <button class="preset-btn active" data-h="320" data-w="240" type="button">240×320 CYD</button>
               <button class="preset-btn" data-h="240" data-w="320" type="button">320×240 T-Deck</button>
               <button class="preset-btn" data-h="135" data-w="240" type="button">240×135 Cardputer</button>
             </div>
           </div>
           <div class="device-stage">
-            <div class="device-bezel">
+            <div class="device-bezel" id="deviceBezel">
+              <div class="bezel-top">
+                <span class="bezel-led"></span>
+                <span class="bezel-speaker"></span>
+              </div>
               <canvas height="440" id="canvas" oncontextmenu="event.preventDefault()" tabindex="0" width="560"></canvas>
             </div>
             <div class="device-footer">
-              <span class="device-footer-hint">Mouse = Touch • Click screen to send Keyboard / Arrow keys</span>
+              <span class="device-footer-hint">Mouse / Touch = Screen Input • Tap screen for Keyboard</span>
               <span class="touch-badge" id="touchBadge">Touch: UP (0, 0)</span>
             </div>
           </div>
@@ -873,22 +1119,28 @@
     </main>
   </div>
 
-  <!-- First-Time Tour Overlay -->
+  <!-- Detailed First-Time Onboarding Tour -->
   <div class="tour-backdrop" id="tourBackdrop" aria-hidden="true"></div>
   <div class="tour-spotlight" id="tourSpotlight" aria-hidden="true"></div>
   <div class="tour-tooltip" id="tourTooltip" role="dialog" aria-modal="true" aria-labelledby="tourTitle">
-    <div class="tour-head">
-      <span class="tour-badge" id="tourStepBadge">Step 1 of 5</span>
-      <button class="tour-close" id="tourCloseBtn" title="Close tour" type="button" aria-label="Close tour">&times;</button>
+    <div class="tour-progress-track">
+      <div class="tour-progress-bar" id="tourProgressBar"></div>
     </div>
-    <h3 class="tour-title" id="tourTitle"></h3>
-    <p class="tour-desc" id="tourDesc"></p>
-    <div class="tour-footer">
-      <div class="tour-dots" id="tourDots"></div>
-      <div class="tour-actions">
-        <button class="btn btn-xs" id="tourSkipBtn" type="button">Skip</button>
-        <button class="btn btn-xs" id="tourPrevBtn" type="button">Back</button>
-        <button class="btn btn-xs btn-primary" id="tourNextBtn" type="button">Next</button>
+    <div class="tour-body">
+      <div class="tour-head">
+        <span class="tour-badge" id="tourStepBadge">Step 1 of 8</span>
+        <button class="tour-close" id="tourCloseBtn" title="Close tour" type="button" aria-label="Close tour">&times;</button>
+      </div>
+      <h3 class="tour-title" id="tourTitle"></h3>
+      <div class="tour-desc" id="tourDesc"></div>
+      <div class="tour-tip" id="tourTip" hidden></div>
+      <div class="tour-footer">
+        <div class="tour-dots" id="tourDots"></div>
+        <div class="tour-actions">
+          <button class="btn btn-xs" id="tourSkipBtn" type="button">Skip</button>
+          <button class="btn btn-xs" id="tourPrevBtn" type="button">Back</button>
+          <button class="btn btn-xs btn-primary" id="tourNextBtn" type="button">Next</button>
+        </div>
       </div>
     </div>
   </div>
@@ -913,8 +1165,7 @@
       presetButtons = document.querySelectorAll(".preset-btn"),
       workspace = document.getElementById("workspace"),
       mobileTabs = document.querySelectorAll(".mobile-tab"),
-      rightCol = document.getElementById("rightCol"),
-      tourBtn = document.getElementById("tourBtn");
+      rightCol = document.getElementById("rightCol");
 
     const BUILTIN_SAMPLES = {
       hello: [
@@ -1069,6 +1320,7 @@
 
     window.onKryonTouch = function(e, t, n) {
       touchBadge.textContent = "Touch: " + (e ? "DOWN" : "UP") + " (" + t + ", " + n + ")";
+      touchBadge.classList.toggle("active", Boolean(e));
     };
 
     runBtn.addEventListener("click", runCurrentCode);
@@ -1141,14 +1393,16 @@
       URL.revokeObjectURL(t.href);
     });
 
-    /* --- First-Time Guided Tour System --- */
-    const TOUR_STORAGE_KEY = "kryonos_tour_done_v1";
+    /* --- Detailed First-Time Tour System (Auto-starts once, no toolbar button) --- */
+    const TOUR_STORAGE_KEY = "kryonos_tour_done_v2";
     const tourBackdrop = document.getElementById("tourBackdrop"),
       tourSpotlight = document.getElementById("tourSpotlight"),
       tourTooltip = document.getElementById("tourTooltip"),
+      tourProgressBar = document.getElementById("tourProgressBar"),
       tourStepBadge = document.getElementById("tourStepBadge"),
       tourTitle = document.getElementById("tourTitle"),
       tourDesc = document.getElementById("tourDesc"),
+      tourTip = document.getElementById("tourTip"),
       tourDots = document.getElementById("tourDots"),
       tourSkipBtn = document.getElementById("tourSkipBtn"),
       tourPrevBtn = document.getElementById("tourPrevBtn"),
@@ -1157,34 +1411,68 @@
 
     const TOUR_STEPS = [
       {
+        target: "#brandGroup",
+        tab: null,
+        category: "Overview",
+        title: "Welcome to KryonOS Web Simulator",
+        desc: "This browser studio runs real <strong>KryonOS JavaScript</strong> apps using <code>Duktape 2.7</code> &amp; <code>SDL2 WebAssembly</code>—no ESP32 hardware required.<ul><li><strong>Amber dot:</strong> WASM engine is initializing</li><li><strong>Green dot:</strong> Ready to execute code</li><li><strong>Red dot:</strong> Runtime or script error detected</li></ul>",
+        tip: "Everything executes locally in your browser memory and virtual filesystem."
+      },
+      {
         target: "#sampleSelect",
         tab: null,
-        title: "Samples & Local Scripts",
-        desc: "Switch between built-in KryonOS examples like <code>3D Cube</code>, <code>2D Paint</code>, or <code>FS &amp; Crypto</code>, or open/save your own <code>.js</code> file."
+        category: "Starter Apps",
+        title: "Explore Built-in Sample Apps",
+        desc: "Use this dropdown to load and immediately run curated demos:<ul><li><code>3D Cube + Touch</code> — Real-time 3D projection + touch circles</li><li><code>2D Paint &amp; Sprites</code> — Freehand canvas drawing via touch</li><li><code>FS &amp; Crypto</code> — Virtual file read/write, SHA-256 &amp; FastMath</li></ul>",
+        tip: "Selecting any sample automatically updates main.js and runs it."
+      },
+      {
+        target: "#fileGroup",
+        tab: null,
+        category: "File Management",
+        title: "Open & Save Local Scripts",
+        desc: "Work seamlessly with scripts stored on your phone or computer:<ul><li><strong>Open:</strong> Pick any <code>.js</code> file from your device storage and run it right away</li><li><strong>Save:</strong> Export your edited code as <code>main.js</code> anytime</li></ul>",
+        tip: "Great for flashing or backing up apps you test in the simulator."
       },
       {
         target: "#editorCard",
         tab: "editor",
-        title: "Write KryonOS JavaScript",
-        desc: "Edit <code>main.js</code> here using built-in APIs like <code>Kryon3D</code>, <code>System</code>, <code>Touch</code>, <code>FS</code>, and <code>Crypto</code>."
+        category: "Code Editor",
+        title: "Write & Edit KryonOS Apps (main.js)",
+        desc: "Write ES5/Duktape JavaScript using built-in hardware modules:<ul><li><code>System</code> — Screen text, shapes, frame delay &amp; loop state</li><li><code>Kryon3D</code> — 3D camera, cubes &amp; scene rendering</li><li><code>Touch</code> &amp; <code>Graphics</code> — Live touch coordinates &amp; RGB565 colors</li><li><code>FS</code>, <code>Crypto</code> &amp; <code>FastMath</code> — Storage, SHA-256 &amp; math helpers</li></ul>",
+        tip: "Shortcuts: Press Tab for 2-space indent and Ctrl+Enter to run on desktop."
       },
       {
-        target: "#runBtn",
+        target: "#runGroup",
         tab: null,
-        title: "Run, Stop & Reload",
-        desc: "Tap <strong>▶ Run</strong> (or press <code>Ctrl+Enter</code> on desktop) to compile and run your script inside the WASM simulator."
+        category: "Execution Controls",
+        title: "Run, Stop & Reload Your App",
+        desc: "Control the Duktape execution loop safely:<ul><li><strong>Run:</strong> Evaluates the current code in <code>main.js</code></li><li><strong>Stop:</strong> Breaks out of <code>while (System.isRunning())</code> loops</li><li><strong>Reload:</strong> Resets and restarts the active script cleanly</li></ul>",
+        tip: "Always use System.isRunning() in game/animation loops so Stop works cleanly."
       },
       {
-        target: "#deviceCard",
+        target: "#presetGroup",
         tab: "simulator",
-        title: "Interactive Virtual Device",
-        desc: "Touch or drag directly on the screen to send <code>Touch.read()</code> coordinates, and switch resolutions for CYD, T-Deck, or Cardputer."
+        category: "Hardware Targets",
+        title: "Switch Device Screen Presets",
+        desc: "Test responsive UI layouts across real ESP32 hardware form factors:<ul><li><code>240×320 CYD</code> — Portrait Cheap Yellow Display</li><li><code>320×240 T-Deck</code> — Landscape LilyGo T-Deck</li><li><code>240×135 Cardputer</code> — Compact M5Stack Cardputer</li></ul>",
+        tip: "Use System.width() and System.height() in your code so apps adapt automatically."
+      },
+      {
+        target: "#deviceBezel",
+        tab: "simulator",
+        category: "Virtual Screen",
+        title: "Touch, Drag & Keyboard Input",
+        desc: "Interact directly with the virtual display just like a physical touchscreen:<ul><li><strong>Touch / Mouse:</strong> Tap or drag to trigger <code>Touch.read()</code> events</li><li><strong>Keyboard:</strong> Tap the screen to focus it, then send arrow or text keys</li><li><strong>Touch Badge:</strong> Displays live <code>DOWN/UP (x, y)</code> state below</li></ul>",
+        tip: "On Android, dragging inside the screen draws smoothly without scrolling the page."
       },
       {
         target: "#consoleCard",
         tab: "simulator",
-        title: "Live Console Output",
-        desc: "Inspect <code>System.print()</code> logs, system notifications, and JavaScript runtime errors here in real time."
+        category: "Diagnostics",
+        title: "Live Console & Error Output",
+        desc: "Monitor everything your app outputs at runtime:<ul><li><code>System.print()</code> debug logs &amp; variable values</li><li><code>System.notify()</code> cyan notification logs</li><li>Amber warnings and red <code>JS ERROR</code> stack messages</li></ul>",
+        tip: "Use the Clear button anytime to wipe old logs before your next test run."
       }
     ];
 
@@ -1221,7 +1509,7 @@
       if (!target) return;
 
       const rect = target.getBoundingClientRect();
-      const pad = 5;
+      const pad = 6;
       const vw = window.innerWidth;
       const vh = window.innerHeight;
 
@@ -1232,12 +1520,12 @@
 
       tourSpotlight.style.top = spTop + "px";
       tourSpotlight.style.left = spLeft + "px";
-      tourSpotlight.style.width = Math.max(24, spWidth) + "px";
-      tourSpotlight.style.height = Math.max(24, spHeight) + "px";
+      tourSpotlight.style.width = Math.max(28, spWidth) + "px";
+      tourSpotlight.style.height = Math.max(28, spHeight) + "px";
 
       const tipRect = tourTooltip.getBoundingClientRect();
-      const tipW = tipRect.width || Math.min(340, vw - 24);
-      const tipH = tipRect.height || 180;
+      const tipW = tipRect.width || Math.min(375, vw - 24);
+      const tipH = tipRect.height || 230;
       const gap = 12;
 
       let tipLeft = rect.left + rect.width / 2 - tipW / 2;
@@ -1252,8 +1540,7 @@
       } else if (spaceAbove >= tipH + 12) {
         tipTop = spTop - tipH - gap;
       } else {
-        // Fallback for large targets (e.g. Editor on mobile): pin neatly inside bottom or top
-        tipTop = spTop > vh * 0.35 ? 12 : Math.max(12, vh - tipH - 12);
+        tipTop = spTop > vh * 0.4 ? 12 : Math.max(12, vh - tipH - 12);
       }
 
       tourTooltip.style.left = tipLeft + "px";
@@ -1268,11 +1555,20 @@
         setMobileTab(step.tab);
       }
 
-      tourStepBadge.textContent = "Step " + (tourIndex + 1) + " of " + TOUR_STEPS.length;
+      tourProgressBar.style.width = (((tourIndex + 1) / TOUR_STEPS.length) * 100) + "%";
+      tourStepBadge.textContent = "Step " + (tourIndex + 1) + " of " + TOUR_STEPS.length + " • " + step.category;
       tourTitle.textContent = step.title;
       tourDesc.innerHTML = step.desc;
+
+      if (step.tip) {
+        tourTip.textContent = "Tip: " + step.tip;
+        tourTip.hidden = false;
+      } else {
+        tourTip.hidden = true;
+      }
+
       tourPrevBtn.disabled = tourIndex === 0;
-      tourNextBtn.textContent = tourIndex === TOUR_STEPS.length - 1 ? "Finish" : "Next";
+      tourNextBtn.textContent = tourIndex === TOUR_STEPS.length - 1 ? "Start Coding!" : "Next";
       renderTourDots();
 
       const target = document.querySelector(step.target);
@@ -1282,7 +1578,7 @@
 
       requestAnimationFrame(function() {
         positionTourElements();
-        setTimeout(positionTourElements, 220);
+        setTimeout(positionTourElements, 240);
       });
     }
 
@@ -1302,7 +1598,6 @@
       markTourDone();
     }
 
-    tourBtn.addEventListener("click", startTour);
     tourSkipBtn.addEventListener("click", endTour);
     tourCloseBtn.addEventListener("click", endTour);
     tourPrevBtn.addEventListener("click", function() {
