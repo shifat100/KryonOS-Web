@@ -219,6 +219,17 @@
       border-color: #fca5a5;
     }
 
+    .btn-ghost {
+      color: var(--primary);
+      border-color: #bfdbfe;
+      background: #eff6ff;
+    }
+
+    .btn-ghost:hover:not(:disabled) {
+      background: #dbeafe;
+      border-color: #93c5fd;
+    }
+
     /* Mobile navigation tabs (hidden on desktop) */
     .mobile-tabs {
       display: none;
@@ -490,6 +501,146 @@
       font-size: 11.5px;
     }
 
+    /* First-Time Tour System */
+    .tour-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 9998;
+      display: none;
+      background: transparent;
+    }
+
+    .tour-backdrop.active {
+      display: block;
+    }
+
+    .tour-spotlight {
+      position: fixed;
+      z-index: 9999;
+      display: none;
+      pointer-events: none;
+      border-radius: 10px;
+      box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.56), 0 0 0 3px #3b82f6;
+      transition: top 0.24s ease, left 0.24s ease, width 0.24s ease, height 0.24s ease;
+    }
+
+    .tour-spotlight.active {
+      display: block;
+    }
+
+    .tour-tooltip {
+      position: fixed;
+      z-index: 10000;
+      display: none;
+      width: 340px;
+      max-width: calc(100vw - 24px);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 20px 45px rgba(15, 23, 42, 0.24);
+      color: var(--text);
+      transition: top 0.24s ease, left 0.24s ease;
+    }
+
+    .tour-tooltip.active {
+      display: block;
+    }
+
+    .tour-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .tour-badge {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--primary);
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      padding: 2px 8px;
+      border-radius: 999px;
+      letter-spacing: 0.2px;
+    }
+
+    .tour-close {
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 18px;
+      line-height: 1;
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+    }
+
+    .tour-close:hover {
+      background: var(--surface-alt);
+      color: var(--text);
+    }
+
+    .tour-title {
+      font-size: 15px;
+      font-weight: 700;
+      margin: 0 0 6px;
+      color: var(--text);
+    }
+
+    .tour-desc {
+      font-size: 13px;
+      line-height: 1.5;
+      color: #475569;
+      margin: 0 0 14px;
+    }
+
+    .tour-desc code {
+      font-family: var(--mono);
+      font-size: 12px;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      padding: 1px 5px;
+      border-radius: 4px;
+      color: var(--primary);
+    }
+
+    .tour-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .tour-dots {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .tour-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--border-strong);
+      transition: background 0.2s, transform 0.2s;
+    }
+
+    .tour-dot.active {
+      background: var(--primary);
+      transform: scale(1.2);
+    }
+
+    .tour-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
     /* Tablet & Android Phone Layout */
     @media (max-width: 900px) {
       .topbar {
@@ -624,6 +775,11 @@
         width: 100%;
         text-align: center;
       }
+
+      .tour-tooltip {
+        width: calc(100vw - 24px);
+        padding: 14px;
+      }
     }
   </style>
 </head>
@@ -649,11 +805,12 @@
           <option value="fs_crypto">Sample: FS &amp; Crypto</option>
         </select>
         <input accept=".js" hidden id="fileInput" type="file">
-        <button class="btn" id="openBtn" title="Open local .js file">Open .js</button>
-        <button class="btn" id="downloadBtn" title="Download current main.js">Save .js</button>
-        <button class="btn" id="reloadBtn" title="Restart current app" disabled>Reload</button>
-        <button class="btn btn-danger" id="stopBtn" title="Stop running loop" disabled>Stop</button>
-        <button class="btn btn-primary" id="runBtn" title="Ctrl + Enter" disabled>▶ Run</button>
+        <button class="btn" id="openBtn" title="Open local .js file" type="button">Open .js</button>
+        <button class="btn" id="downloadBtn" title="Download current main.js" type="button">Save .js</button>
+        <button class="btn" id="reloadBtn" title="Restart current app" type="button" disabled>Reload</button>
+        <button class="btn btn-danger" id="stopBtn" title="Stop running loop" type="button" disabled>Stop</button>
+        <button class="btn btn-primary" id="runBtn" title="Ctrl + Enter" type="button" disabled>▶ Run</button>
+        <button class="btn btn-ghost" id="tourBtn" title="Start Interactive Tour" type="button">? Tour</button>
       </div>
     </header>
 
@@ -663,7 +820,7 @@
     </nav>
 
     <main class="workspace" id="workspace" data-mobile-tab="simulator">
-      <section class="card editor-card">
+      <section class="card editor-card" id="editorCard">
         <div class="card-header">
           <div class="card-title">
             <span>Editor</span>
@@ -684,8 +841,8 @@
         </div>
       </section>
 
-      <div class="right-col">
-        <section class="card device-card">
+      <div class="right-col" id="rightCol">
+        <section class="card device-card" id="deviceCard">
           <div class="card-header">
             <div class="card-title">Virtual Device</div>
             <div class="preset-group">
@@ -705,7 +862,7 @@
           </div>
         </section>
 
-        <section class="card console-card">
+        <section class="card console-card" id="consoleCard">
           <div class="card-header">
             <div class="card-title">Console Output</div>
             <button class="btn btn-xs" id="clearConsoleBtn" type="button">Clear</button>
@@ -714,6 +871,26 @@
         </section>
       </div>
     </main>
+  </div>
+
+  <!-- First-Time Tour Overlay -->
+  <div class="tour-backdrop" id="tourBackdrop" aria-hidden="true"></div>
+  <div class="tour-spotlight" id="tourSpotlight" aria-hidden="true"></div>
+  <div class="tour-tooltip" id="tourTooltip" role="dialog" aria-modal="true" aria-labelledby="tourTitle">
+    <div class="tour-head">
+      <span class="tour-badge" id="tourStepBadge">Step 1 of 5</span>
+      <button class="tour-close" id="tourCloseBtn" title="Close tour" type="button" aria-label="Close tour">&times;</button>
+    </div>
+    <h3 class="tour-title" id="tourTitle"></h3>
+    <p class="tour-desc" id="tourDesc"></p>
+    <div class="tour-footer">
+      <div class="tour-dots" id="tourDots"></div>
+      <div class="tour-actions">
+        <button class="btn btn-xs" id="tourSkipBtn" type="button">Skip</button>
+        <button class="btn btn-xs" id="tourPrevBtn" type="button">Back</button>
+        <button class="btn btn-xs btn-primary" id="tourNextBtn" type="button">Next</button>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -735,7 +912,9 @@
       touchBadge = document.getElementById("touchBadge"),
       presetButtons = document.querySelectorAll(".preset-btn"),
       workspace = document.getElementById("workspace"),
-      mobileTabs = document.querySelectorAll(".mobile-tab");
+      mobileTabs = document.querySelectorAll(".mobile-tab"),
+      rightCol = document.getElementById("rightCol"),
+      tourBtn = document.getElementById("tourBtn");
 
     const BUILTIN_SAMPLES = {
       hello: [
@@ -962,6 +1141,191 @@
       URL.revokeObjectURL(t.href);
     });
 
+    /* --- First-Time Guided Tour System --- */
+    const TOUR_STORAGE_KEY = "kryonos_tour_done_v1";
+    const tourBackdrop = document.getElementById("tourBackdrop"),
+      tourSpotlight = document.getElementById("tourSpotlight"),
+      tourTooltip = document.getElementById("tourTooltip"),
+      tourStepBadge = document.getElementById("tourStepBadge"),
+      tourTitle = document.getElementById("tourTitle"),
+      tourDesc = document.getElementById("tourDesc"),
+      tourDots = document.getElementById("tourDots"),
+      tourSkipBtn = document.getElementById("tourSkipBtn"),
+      tourPrevBtn = document.getElementById("tourPrevBtn"),
+      tourNextBtn = document.getElementById("tourNextBtn"),
+      tourCloseBtn = document.getElementById("tourCloseBtn");
+
+    const TOUR_STEPS = [
+      {
+        target: "#sampleSelect",
+        tab: null,
+        title: "Samples & Local Scripts",
+        desc: "Switch between built-in KryonOS examples like <code>3D Cube</code>, <code>2D Paint</code>, or <code>FS &amp; Crypto</code>, or open/save your own <code>.js</code> file."
+      },
+      {
+        target: "#editorCard",
+        tab: "editor",
+        title: "Write KryonOS JavaScript",
+        desc: "Edit <code>main.js</code> here using built-in APIs like <code>Kryon3D</code>, <code>System</code>, <code>Touch</code>, <code>FS</code>, and <code>Crypto</code>."
+      },
+      {
+        target: "#runBtn",
+        tab: null,
+        title: "Run, Stop & Reload",
+        desc: "Tap <strong>▶ Run</strong> (or press <code>Ctrl+Enter</code> on desktop) to compile and run your script inside the WASM simulator."
+      },
+      {
+        target: "#deviceCard",
+        tab: "simulator",
+        title: "Interactive Virtual Device",
+        desc: "Touch or drag directly on the screen to send <code>Touch.read()</code> coordinates, and switch resolutions for CYD, T-Deck, or Cardputer."
+      },
+      {
+        target: "#consoleCard",
+        tab: "simulator",
+        title: "Live Console Output",
+        desc: "Inspect <code>System.print()</code> logs, system notifications, and JavaScript runtime errors here in real time."
+      }
+    ];
+
+    let tourActive = false;
+    let tourIndex = 0;
+
+    function isTourDone() {
+      try {
+        return localStorage.getItem(TOUR_STORAGE_KEY) === "1";
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function markTourDone() {
+      try {
+        localStorage.setItem(TOUR_STORAGE_KEY, "1");
+      } catch (e) {}
+    }
+
+    function renderTourDots() {
+      tourDots.innerHTML = "";
+      for (let i = 0; i < TOUR_STEPS.length; i++) {
+        const dot = document.createElement("span");
+        dot.className = "tour-dot" + (i === tourIndex ? " active" : "");
+        tourDots.appendChild(dot);
+      }
+    }
+
+    function positionTourElements() {
+      if (!tourActive) return;
+      const step = TOUR_STEPS[tourIndex];
+      const target = document.querySelector(step.target);
+      if (!target) return;
+
+      const rect = target.getBoundingClientRect();
+      const pad = 5;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+
+      const spTop = Math.max(4, rect.top - pad);
+      const spLeft = Math.max(4, rect.left - pad);
+      const spWidth = Math.min(vw - spLeft - 4, rect.width + pad * 2);
+      const spHeight = Math.min(vh - spTop - 4, rect.height + pad * 2);
+
+      tourSpotlight.style.top = spTop + "px";
+      tourSpotlight.style.left = spLeft + "px";
+      tourSpotlight.style.width = Math.max(24, spWidth) + "px";
+      tourSpotlight.style.height = Math.max(24, spHeight) + "px";
+
+      const tipRect = tourTooltip.getBoundingClientRect();
+      const tipW = tipRect.width || Math.min(340, vw - 24);
+      const tipH = tipRect.height || 180;
+      const gap = 12;
+
+      let tipLeft = rect.left + rect.width / 2 - tipW / 2;
+      tipLeft = Math.max(12, Math.min(vw - tipW - 12, tipLeft));
+
+      let tipTop;
+      const spaceBelow = vh - (spTop + spHeight) - gap;
+      const spaceAbove = spTop - gap;
+
+      if (spaceBelow >= tipH + 12) {
+        tipTop = spTop + spHeight + gap;
+      } else if (spaceAbove >= tipH + 12) {
+        tipTop = spTop - tipH - gap;
+      } else {
+        // Fallback for large targets (e.g. Editor on mobile): pin neatly inside bottom or top
+        tipTop = spTop > vh * 0.35 ? 12 : Math.max(12, vh - tipH - 12);
+      }
+
+      tourTooltip.style.left = tipLeft + "px";
+      tourTooltip.style.top = tipTop + "px";
+    }
+
+    function showTourStep(idx) {
+      tourIndex = Math.max(0, Math.min(TOUR_STEPS.length - 1, idx));
+      const step = TOUR_STEPS[tourIndex];
+
+      if (window.innerWidth <= 900 && step.tab) {
+        setMobileTab(step.tab);
+      }
+
+      tourStepBadge.textContent = "Step " + (tourIndex + 1) + " of " + TOUR_STEPS.length;
+      tourTitle.textContent = step.title;
+      tourDesc.innerHTML = step.desc;
+      tourPrevBtn.disabled = tourIndex === 0;
+      tourNextBtn.textContent = tourIndex === TOUR_STEPS.length - 1 ? "Finish" : "Next";
+      renderTourDots();
+
+      const target = document.querySelector(step.target);
+      if (target && window.innerWidth <= 900) {
+        target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+
+      requestAnimationFrame(function() {
+        positionTourElements();
+        setTimeout(positionTourElements, 220);
+      });
+    }
+
+    function startTour() {
+      tourActive = true;
+      tourBackdrop.classList.add("active");
+      tourSpotlight.classList.add("active");
+      tourTooltip.classList.add("active");
+      showTourStep(0);
+    }
+
+    function endTour() {
+      tourActive = false;
+      tourBackdrop.classList.remove("active");
+      tourSpotlight.classList.remove("active");
+      tourTooltip.classList.remove("active");
+      markTourDone();
+    }
+
+    tourBtn.addEventListener("click", startTour);
+    tourSkipBtn.addEventListener("click", endTour);
+    tourCloseBtn.addEventListener("click", endTour);
+    tourPrevBtn.addEventListener("click", function() {
+      if (tourIndex > 0) showTourStep(tourIndex - 1);
+    });
+    tourNextBtn.addEventListener("click", function() {
+      if (tourIndex < TOUR_STEPS.length - 1) showTourStep(tourIndex + 1);
+      else endTour();
+    });
+
+    window.addEventListener("resize", positionTourElements);
+    rightCol.addEventListener("scroll", positionTourElements);
+    window.addEventListener("keydown", function(e) {
+      if (!tourActive) return;
+      if (e.key === "Escape") endTour();
+      else if (e.key === "ArrowRight") {
+        if (tourIndex < TOUR_STEPS.length - 1) showTourStep(tourIndex + 1);
+        else endTour();
+      } else if (e.key === "ArrowLeft" && tourIndex > 0) {
+        showTourStep(tourIndex - 1);
+      }
+    });
+
     var Module = {
       canvas: document.getElementById("canvas"),
       printErr: function(e) {
@@ -985,6 +1349,10 @@
 
     editor.value = BUILTIN_SAMPLES.hello;
     updateGutter();
+
+    if (!isTourDone()) {
+      setTimeout(startTour, 450);
+    }
   </script>
   <script async src="KryonOS-Simulator.js"></script>
 </body>
